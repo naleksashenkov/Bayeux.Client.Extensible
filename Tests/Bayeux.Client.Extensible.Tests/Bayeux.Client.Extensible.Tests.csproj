@@ -1,0 +1,61 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- The library ships three targets; running the suite on only the newest one would leave the
+         polyfilled System.Text.Json, Microsoft.Bcl.AsyncInterfaces and the HttpWebRequest-based
+         HttpClient untested. net472 exercises all three at once. netstandard2.0 is not a runtime,
+         so there is nothing to execute it on.
+
+         Only on Windows: .NET Framework tests need Mono to even start elsewhere, and a "dotnet
+         test" that always fails on the maintainer's own machine is a test suite people stop
+         running. CI covers net472 on a windows runner. -->
+    <TargetFrameworks Condition="'$(OS)' == 'Windows_NT'">net10.0;net472</TargetFrameworks>
+    <TargetFrameworks Condition="'$(OS)' != 'Windows_NT'">net10.0</TargetFrameworks>
+    <!-- net472 would otherwise default to C# 7.3, which predates nullable reference types. -->
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <!-- On .NET Framework HttpClient lives in a separate assembly that is not referenced by
+       default, exactly as in the library's own project file. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+  <!-- ImplicitUsings does not emit the default set for this target. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <Using Include="System" />
+    <Using Include="System.Collections.Generic" />
+    <Using Include="System.Linq" />
+    <Using Include="System.Net.Http" />
+    <Using Include="System.Threading" />
+    <Using Include="System.Threading.Tasks" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Bayeux.Client.Extensible.csproj" />
+  </ItemGroup>
+
+  <!-- The Salesforce replay extension is a sample, not part of the library, but it is the one real
+       extension in the repository; compiled in here, it is exercised through the actual poller.
+       Linked rather than referenced: the samples project is an executable for net10.0 only, and
+       this suite also builds for net472. -->
+  <ItemGroup>
+    <Compile Include="..\..\Samples\Bayeux.Client.Extensible.Samples\SalesforceReplayExtension.cs"
+             Link="Samples\SalesforceReplayExtension.cs" />
+  </ItemGroup>
+
+</Project>

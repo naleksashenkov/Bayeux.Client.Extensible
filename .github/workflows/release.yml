@@ -1,0 +1,91 @@
+name: Release
+
+# Tags only. CI runs on every push; this is the one workflow that makes something public, so it
+# has to be deliberate — pushing a tag is the deliberate act.
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # to create the GitHub release
+
+jobs:
+  publish:
+    name: Publish to NuGet
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # v0.1.0 -> 0.1.0. The tag is the single source of truth for the version; the <Version> in
+      # the project file is only what a local build produces.
+      - name: Read the version from the tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # A release with no changelog entry is a release nobody can evaluate before upgrading.
+      # Failing here costs one tag; finding out afterwards costs a version number.
+      - name: Require a changelog section for this version
+        run: |
+          version='${{ steps.version.outputs.value }}'
+          if ! grep -qE "^## \[$version\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$version]' section."
+            echo "Promote the Unreleased section to '## [$version] - $(date +%F)', commit, and re-tag."
+            exit 1
+          fi
+
+      - name: Build
+        run: dotnet build Bayeux.Client.Extensible.slnx --configuration Release
+
+      # The full matrix already ran on main; this is the last chance to catch a tag placed on a
+      # commit that was never green.
+      - name: Test
+        run: dotnet test Tests/Bayeux.Client.Extensible.Tests --configuration Release --no-build
+
+      - name: Pack
+        run: |
+          dotnet pack Bayeux.Client.Extensible.csproj \
+            --configuration Release \
+            --output ./artifacts \
+            -p:Version=${{ steps.version.outputs.value }}
+
+      # Pushing the .nupkg uploads the matching .snupkg with it.
+      # --skip-duplicate makes a re-run of a partly finished release harmless.
+      - name: Push to NuGet
+        run: |
+          dotnet nuget push "./artifacts/*.nupkg" \
+            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      # The section between this version's heading and the next one, used as the release body.
+      - name: Extract the changelog section
+        run: |
+          awk -v v='${{ steps.version.outputs.value }}' '
+            $0 ~ "^## \\[" v "\\]"  { found = 1; next }
+            found && /^## \[/         { exit }
+            found && /^\[[^]]+\]:/    { exit }   # link definitions at the foot of the file
+            found                     { print }
+          ' CHANGELOG.md > release-notes.md
+          cat release-notes.md
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            ./artifacts/*.nupkg
+
+      - name: Upload the package as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg-${{ steps.version.outputs.value }}
+          path: ./artifacts/*

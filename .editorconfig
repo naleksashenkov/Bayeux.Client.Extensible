@@ -1,0 +1,6 @@
+root = true
+
+# The public API analyzer's severities are not set here but in Bayeux.Client.Extensible.csproj
+# (WarningsAsErrors). A [*.cs] section only applies to diagnostics reported against .cs files, and
+# RS0017 - an entry for a member that no longer exists - is reported against PublicAPI.Unshipped.txt,
+# so it stayed a warning and a removed member did not fail the build.

@@ -1,0 +1,9 @@
+{
+  "name": "bayeux-client-extensible-test-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CometD reference server used by the integration tests.",
+  "type": "module",
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": { "cometd-nodejs-server": "^2.0.0" }
+}

@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Bayeux.Client.Extensible.slnx
+
+      # net472 builds on Linux thanks to Microsoft.NETFramework.ReferenceAssemblies.
+      # The solution, not the bare project: without it "dotnet build" in the repository root
+      # compiles only the library, and a later "dotnet test --no-build" silently runs no tests.
+      - name: Build all target frameworks
+        run: dotnet build Bayeux.Client.Extensible.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Tests/Bayeux.Client.Extensible.Tests --configuration Release --no-build --verbosity normal
+
+      - name: Pack
+        run: dotnet pack Bayeux.Client.Extensible.csproj --configuration Release --no-build --output ./artifacts
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: ./artifacts/*.nupkg
+
+  framework:
+    name: .NET Framework 4.7.2
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # The library targets net472 as well, and none of that build is exercised by the Linux job:
+      # a polyfilled System.Text.Json, Microsoft.Bcl.AsyncInterfaces instead of the real
+      # IAsyncDisposable, and an HttpClient over HttpWebRequest with its own cookie and
+      # cancellation behaviour. Only a Windows runner can execute it.
+      - name: Test on .NET Framework
+        run: dotnet test Tests/Bayeux.Client.Extensible.Tests --framework net472 --configuration Release --verbosity normal
+
+  integration:
+    name: Integration against a real CometD server
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Start the CometD reference server
+        run: |
+          cd Tests/cometd-server
+          npm install
+          node server.mjs &
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://127.0.0.1:8099/cometd/handshake -X POST \
+              -H 'Content-Type: application/json' \
+              -d '[{"channel":"/meta/handshake","version":"1.0","supportedConnectionTypes":["long-polling"],"id":"probe"}]' && break
+            sleep 1
+          done
+
+      - name: Run integration tests
+        env:
+          BAYEUX_COMETD_URL: http://127.0.0.1:8099/
+        run: dotnet test Tests/Bayeux.Client.Extensible.IntegrationTests --configuration Release --verbosity normal

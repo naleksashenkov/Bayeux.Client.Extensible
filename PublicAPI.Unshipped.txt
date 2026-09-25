@@ -1,0 +1,168 @@
+#nullable enable
+Bayeux.Client.Extensible.Authentication.EventModels.OnCredentialsUpdatedEventArgs
+Bayeux.Client.Extensible.Authentication.EventModels.OnCredentialsUpdatedEventArgs.Error.get -> System.Exception?
+Bayeux.Client.Extensible.Authentication.EventModels.OnCredentialsUpdatedEventArgs.IsSuccess.get -> bool
+Bayeux.Client.Extensible.Authentication.EventModels.OnCredentialsUpdatedEventArgs.OnCredentialsUpdatedEventArgs(bool isSuccess, System.Exception? error = null) -> void
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs.DisconnectError.get -> System.Exception?
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs.Error.get -> System.Exception?
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs.IsSuccess.get -> bool
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs.OnPollerDisconnectedEventArgs(Bayeux.Client.Extensible.Core.Models.DisconnectReason reason, System.Exception? error = null, System.Exception? disconnectError = null) -> void
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs.Reason.get -> Bayeux.Client.Extensible.Core.Models.DisconnectReason
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerErrorEventArgs
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerErrorEventArgs.Error.get -> System.Exception!
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerErrorEventArgs.IsFatal.get -> bool
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerErrorEventArgs.OnPollerErrorEventArgs(System.Exception! error, Bayeux.Client.Extensible.Core.Models.ErrorSource source, bool isFatal) -> void
+Bayeux.Client.Extensible.Authentication.EventModels.OnPollerErrorEventArgs.Source.get -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Authentication.HttpBasicAuthProvider
+Bayeux.Client.Extensible.Authentication.HttpBasicAuthProvider.ApplyAsync(System.Net.Http.HttpRequestMessage! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Authentication.HttpBasicAuthProvider.HttpBasicAuthProvider(Bayeux.Client.Extensible.Authentication.Models.BasicAuthCredentials! credentials) -> void
+Bayeux.Client.Extensible.Authentication.HttpBasicAuthProvider.OnCredentialsUpdated -> System.EventHandler<Bayeux.Client.Extensible.Authentication.EventModels.OnCredentialsUpdatedEventArgs!>?
+Bayeux.Client.Extensible.Authentication.HttpBasicAuthProvider.UpdateCredentials(Bayeux.Client.Extensible.Authentication.Models.BasicAuthCredentials! credentials) -> void
+Bayeux.Client.Extensible.Authentication.IAuthProvider
+Bayeux.Client.Extensible.Authentication.IAuthProvider.ApplyAsync(System.Net.Http.HttpRequestMessage! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Authentication.IAuthProvider<TAuthData>
+Bayeux.Client.Extensible.Authentication.IAuthProvider<TAuthData>.OnCredentialsUpdated -> System.EventHandler<Bayeux.Client.Extensible.Authentication.EventModels.OnCredentialsUpdatedEventArgs!>?
+Bayeux.Client.Extensible.Authentication.IAuthProvider<TAuthData>.UpdateCredentials(TAuthData credentials) -> void
+Bayeux.Client.Extensible.Authentication.Models.BasicAuthCredentials
+Bayeux.Client.Extensible.Authentication.Models.BasicAuthCredentials.BasicAuthCredentials(string! login, string! password) -> void
+Bayeux.Client.Extensible.Authentication.Models.BasicAuthCredentials.Login.get -> string!
+Bayeux.Client.Extensible.Authentication.Models.BasicAuthCredentials.Login.set -> void
+Bayeux.Client.Extensible.Authentication.Models.BasicAuthCredentials.Password.get -> string!
+Bayeux.Client.Extensible.Authentication.Models.BasicAuthCredentials.Password.set -> void
+Bayeux.Client.Extensible.Authentication.NoAuthProvider
+Bayeux.Client.Extensible.Authentication.NoAuthProvider.ApplyAsync(System.Net.Http.HttpRequestMessage! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Authentication.NoAuthProvider.NoAuthProvider() -> void
+Bayeux.Client.Extensible.Core.BayeuxEvent
+Bayeux.Client.Extensible.Core.BayeuxEvent.BayeuxEvent(string! channel, System.Text.Json.JsonElement data, System.Collections.Generic.IReadOnlyDictionary<string!, System.Text.Json.JsonElement>? ext) -> void
+Bayeux.Client.Extensible.Core.BayeuxEvent.Channel.get -> string!
+Bayeux.Client.Extensible.Core.BayeuxEvent.Data.get -> System.Text.Json.JsonElement
+Bayeux.Client.Extensible.Core.BayeuxEvent.Ext.get -> System.Collections.Generic.IReadOnlyDictionary<string!, System.Text.Json.JsonElement>?
+Bayeux.Client.Extensible.Core.BayeuxEventHandler
+Bayeux.Client.Extensible.Core.CometDPoller
+Bayeux.Client.Extensible.Core.CometDPoller.AuthProvider.get -> Bayeux.Client.Extensible.Authentication.IAuthProvider!
+Bayeux.Client.Extensible.Core.CometDPoller.ClientId.get -> string!
+Bayeux.Client.Extensible.Core.CometDPoller.CometDPoller(System.Net.Http.HttpClient! client, Bayeux.Client.Extensible.Core.Models.CometdPollerOptions! options, Bayeux.Client.Extensible.Authentication.IAuthProvider! authProvider, System.EventHandler<Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs!>! onPollerDisconnected, System.Net.CookieContainer? cookie = null, Microsoft.Extensions.Logging.ILogger<Bayeux.Client.Extensible.Core.CometDPoller!>? logger = null) -> void
+Bayeux.Client.Extensible.Core.CometDPoller.ConnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Core.CometDPoller.ConnectInterval.get -> int?
+Bayeux.Client.Extensible.Core.CometDPoller.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Core.CometDPoller.Dispose() -> void
+Bayeux.Client.Extensible.Core.CometDPoller.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Bayeux.Client.Extensible.Core.CometDPoller.IsDestroyed.get -> bool
+Bayeux.Client.Extensible.Core.CometDPoller.OnError -> System.EventHandler<Bayeux.Client.Extensible.Authentication.EventModels.OnPollerErrorEventArgs!>?
+Bayeux.Client.Extensible.Core.CometDPoller.OnPollerDisconnected -> System.EventHandler<Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs!>!
+Bayeux.Client.Extensible.Core.CometDPoller.Options.get -> Bayeux.Client.Extensible.Core.Models.CometdPollerOptions!
+Bayeux.Client.Extensible.Core.CometDPoller.SubscribeNewChannelsAsync(System.Collections.Generic.IDictionary<string!, Bayeux.Client.Extensible.Core.BayeuxEventHandler!>! channels, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Core.CometDPoller.UnsubscribeChannelsAsync(System.Collections.Generic.IEnumerable<string!>! channels, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.BaseLongPollingRequestModel(string? clientId, string! channel, string! requestId) -> void
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.Channel.get -> string!
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.Channel.set -> void
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.ClientId.get -> string?
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.ClientId.set -> void
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.Endpoint.get -> string!
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.Ext.get -> System.Collections.Generic.Dictionary<string!, object!>?
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.FormLongPollingRequestJson() -> string!
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.RequestId.get -> string!
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.RequestId.set -> void
+Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.Ext.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel.BayeuxResponseAdviceModel() -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel.Interval.get -> int?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel.Interval.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel.IsMultipleClients.get -> bool?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel.IsMultipleClients.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel.Reconnect.get -> string?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel.Reconnect.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel.Timeout.get -> int?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel.Timeout.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Advice.get -> Bayeux.Client.Extensible.Core.Models.BayeuxResponseAdviceModel?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Advice.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.AuthSuccessful.get -> bool?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.AuthSuccessful.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.BayeuxResponseMessageModel() -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Channel.get -> string?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Channel.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.ClientId.get -> string?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.ClientId.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Data.get -> System.Text.Json.JsonElement
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Data.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Error.get -> string?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Error.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Ext.get -> System.Collections.Generic.Dictionary<string!, System.Text.Json.JsonElement>?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Ext.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Id.get -> string?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Id.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.IsSuccessful.get -> bool?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.IsSuccessful.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Subscription.get -> string?
+Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel.Subscription.set -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxSubscriptionException
+Bayeux.Client.Extensible.Core.Models.BayeuxSubscriptionException.BayeuxSubscriptionException(System.Collections.Generic.IReadOnlyDictionary<string!, System.Exception!>! failures, System.Collections.Generic.IReadOnlyList<string!>! succeeded) -> void
+Bayeux.Client.Extensible.Core.Models.BayeuxSubscriptionException.Failures.get -> System.Collections.Generic.IReadOnlyDictionary<string!, System.Exception!>!
+Bayeux.Client.Extensible.Core.Models.BayeuxSubscriptionException.Succeeded.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Bayeux.Client.Extensible.Core.Models.CometdPollerOptions
+Bayeux.Client.Extensible.Core.Models.CometdPollerOptions.Channels.get -> System.Collections.Generic.IReadOnlyDictionary<string!, Bayeux.Client.Extensible.Core.BayeuxEventHandler!>!
+Bayeux.Client.Extensible.Core.Models.CometdPollerOptions.CometdPath.get -> string!
+Bayeux.Client.Extensible.Core.Models.CometdPollerOptions.CometdPollerOptions(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<string!, Bayeux.Client.Extensible.Core.BayeuxEventHandler!>>! channels, string! cometdPath, System.TimeSpan? disconnectTimeout = null, System.Collections.Generic.IEnumerable<Bayeux.Client.Extensible.Interfaces.IBayeuxExt!>? extensions = null) -> void
+Bayeux.Client.Extensible.Core.Models.CometdPollerOptions.DisconnectTimeout.get -> System.TimeSpan
+Bayeux.Client.Extensible.Core.Models.CometdPollerOptions.Extensions.get -> System.Collections.Generic.IReadOnlyList<Bayeux.Client.Extensible.Interfaces.IBayeuxExt!>!
+Bayeux.Client.Extensible.Core.Models.ConnectRequestModel
+Bayeux.Client.Extensible.Core.Models.ConnectRequestModel.ConnectionType.get -> string!
+Bayeux.Client.Extensible.Core.Models.ConnectRequestModel.ConnectionType.set -> void
+Bayeux.Client.Extensible.Core.Models.ConnectRequestModel.ConnectRequestModel(string! clientId, string! requestId) -> void
+Bayeux.Client.Extensible.Core.Models.ConnectResult
+Bayeux.Client.Extensible.Core.Models.ConnectResult.Continue = 0 -> Bayeux.Client.Extensible.Core.Models.ConnectResult
+Bayeux.Client.Extensible.Core.Models.ConnectResult.Rehandshake = 1 -> Bayeux.Client.Extensible.Core.Models.ConnectResult
+Bayeux.Client.Extensible.Core.Models.ConnectResult.Stop = 2 -> Bayeux.Client.Extensible.Core.Models.ConnectResult
+Bayeux.Client.Extensible.Core.Models.DisconnectReason
+Bayeux.Client.Extensible.Core.Models.DisconnectReason.Failed = 2 -> Bayeux.Client.Extensible.Core.Models.DisconnectReason
+Bayeux.Client.Extensible.Core.Models.DisconnectReason.ServerRequirement = 1 -> Bayeux.Client.Extensible.Core.Models.DisconnectReason
+Bayeux.Client.Extensible.Core.Models.DisconnectReason.TokenCancellation = 0 -> Bayeux.Client.Extensible.Core.Models.DisconnectReason
+Bayeux.Client.Extensible.Core.Models.DisconnectRequestModel
+Bayeux.Client.Extensible.Core.Models.DisconnectRequestModel.DisconnectRequestModel(string! clientId, string! requestId) -> void
+Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.ErrorSource.Configuration = 1 -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.ErrorSource.Connect = 3 -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.ErrorSource.Disconnect = 2 -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.ErrorSource.Ext = 8 -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.ErrorSource.Handler = 7 -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.ErrorSource.Handshake = 4 -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.ErrorSource.Http = 0 -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.ErrorSource.Subscribe = 5 -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.ErrorSource.Unsubscribe = 6 -> Bayeux.Client.Extensible.Core.Models.ErrorSource
+Bayeux.Client.Extensible.Core.Models.HandshakeRequestModel
+Bayeux.Client.Extensible.Core.Models.HandshakeRequestModel.HandshakeRequestModel(string! requestId) -> void
+Bayeux.Client.Extensible.Core.Models.HandshakeRequestModel.MinimumVersion.get -> string!
+Bayeux.Client.Extensible.Core.Models.HandshakeRequestModel.MinimumVersion.set -> void
+Bayeux.Client.Extensible.Core.Models.HandshakeRequestModel.SupportedConnectionTypes.get -> string![]!
+Bayeux.Client.Extensible.Core.Models.HandshakeRequestModel.SupportedConnectionTypes.set -> void
+Bayeux.Client.Extensible.Core.Models.HandshakeRequestModel.Version.get -> string!
+Bayeux.Client.Extensible.Core.Models.HandshakeRequestModel.Version.set -> void
+Bayeux.Client.Extensible.Core.Models.SubscribeRequestModel
+Bayeux.Client.Extensible.Core.Models.SubscribeRequestModel.SubscribeRequestModel(string? clientId, string! subscription, string! requestId) -> void
+Bayeux.Client.Extensible.Core.Models.SubscribeRequestModel.Subscription.get -> string!
+Bayeux.Client.Extensible.Core.Models.SubscribeRequestModel.Subscription.set -> void
+Bayeux.Client.Extensible.Core.Models.UnsubscribeRequestModel
+Bayeux.Client.Extensible.Core.Models.UnsubscribeRequestModel.Subscription.get -> string!
+Bayeux.Client.Extensible.Core.Models.UnsubscribeRequestModel.Subscription.set -> void
+Bayeux.Client.Extensible.Core.Models.UnsubscribeRequestModel.UnsubscribeRequestModel(string? clientId, string! subscription, string! requestId) -> void
+Bayeux.Client.Extensible.Interfaces.IBayeuxExt
+Bayeux.Client.Extensible.Interfaces.IBayeuxExt.Incoming(Bayeux.Client.Extensible.Core.Models.BayeuxResponseMessageModel! responseModel) -> void
+Bayeux.Client.Extensible.Interfaces.IBayeuxExt.OutgoingAsync(Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel! requestModel, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.AuthProvider.get -> Bayeux.Client.Extensible.Authentication.IAuthProvider!
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.ConnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.DisconnectAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.IsDestroyed.get -> bool
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.ClientId.get -> string!
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.OnError -> System.EventHandler<Bayeux.Client.Extensible.Authentication.EventModels.OnPollerErrorEventArgs!>?
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.OnPollerDisconnected -> System.EventHandler<Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs!>!
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.Options.get -> Bayeux.Client.Extensible.Core.Models.CometdPollerOptions!
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.SubscribeNewChannelsAsync(System.Collections.Generic.IDictionary<string!, Bayeux.Client.Extensible.Core.BayeuxEventHandler!>! channels, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Interfaces.IBayeuxPoller.UnsubscribeChannelsAsync(System.Collections.Generic.IEnumerable<string!>! channels, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+static Bayeux.Client.Extensible.Authentication.EventModels.OnCredentialsUpdatedEventArgs.Create(System.Exception? error = null) -> Bayeux.Client.Extensible.Authentication.EventModels.OnCredentialsUpdatedEventArgs!
+static Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs.Create(Bayeux.Client.Extensible.Core.Models.DisconnectReason reason, System.Exception? error = null, System.Exception? disconnectError = null) -> Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs!
+static Bayeux.Client.Extensible.Authentication.NoAuthProvider.Instance.get -> Bayeux.Client.Extensible.Authentication.NoAuthProvider!
+static Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel.FormLongPollingRequestJson(System.Collections.Generic.IReadOnlyList<Bayeux.Client.Extensible.Core.Models.BaseLongPollingRequestModel!>! messages) -> string!

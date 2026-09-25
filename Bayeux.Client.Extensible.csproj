@@ -1,9 +1,110 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFrameworks>net10.0;netstandard2.0;net472</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>Bayeux.Client.Extensible</PackageId>
+    <Version>0.1.0-alpha</Version>
+    <Authors>Nikita Aleksashenkov</Authors>
+    <Copyright>Copyright (c) 2026 Nikita Aleksashenkov</Copyright>
+    <Description>A .NET Bayeux (CometD) long-polling client with pluggable authentication. Written from the Bayeux protocol specification.</Description>
+    <PackageTags>bayeux;cometd;long-polling;push;streaming;authentication</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/naleksashenkov/Bayeux.Client.Extensible</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/naleksashenkov/Bayeux.Client.Extensible</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <!-- Source Link. The GitHub provider ships inside the SDK, so no PackageReference is needed:
+       these properties are all that turn it on. Without them a consumer whose production code
+       faults inside this library has a stack trace and no way to step into it. -->
+  <PropertyGroup>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!-- Only on the build server: it rewrites local paths to deterministic ones, which is what
+         makes the binary reproducible, but it also breaks debugging of a local build. -->
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="NOTICE" Pack="true" PackagePath="\" />
+    <None Include="CHANGELOG.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!-- The project sits at the repository root, so its default glob would otherwise
+       compile the test projects into the library. -->
+  <ItemGroup>
+    <Compile Remove="Tests/**;Samples/**" />
+    <None Remove="Tests/**;Samples/**" />
+    <EmbeddedResource Remove="Tests/**;Samples/**" />
+  </ItemGroup>
+
+  <!-- The public surface is checked in. Anything added, removed or re-signed fails the build
+       until PublicAPI.Unshipped.txt is updated, so a breaking change is a deliberate edit in a
+       reviewable file rather than something a consumer discovers after upgrading. The severities
+       that make it fail rather than warn are in .editorconfig.
+
+       The files start with "#nullable enable", so a change from string to string? is a change to
+       the recorded surface as well. One file set covers all three targets: the annotations
+       describe our own declarations, not the BCL reference assemblies, which differ. -->
+  <ItemGroup>
+    <!-- The package adds PublicAPI.Shipped.txt and PublicAPI.Unshipped.txt as AdditionalFiles by
+         itself. Listing them here again duplicates them: the build does not mind, but
+         "dotnet format" then cannot tell which copy to edit and silently fixes nothing. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="3.3.4" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- As errors, not warnings, since a build ignores warnings. Set here rather than in .editorconfig:
+       an editorconfig section is matched against the file a diagnostic points at, and RS0017 points
+       at PublicAPI.Unshipped.txt, so a [*.cs] section silently left removals as warnings.
+       RS0016 member added, RS0017 member removed, RS0022/RS0024/RS0025 malformed or duplicated
+       entries, RS0026/RS0027 overloads with optional parameters. -->
+  <PropertyGroup>
+    <WarningsAsErrors>$(WarningsAsErrors);RS0016;RS0017;RS0022;RS0024;RS0025;RS0026;RS0027</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+  </ItemGroup>
+
+  <!-- Needed on every target: unlike System.Text.Json, this is never part of the framework. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="2.1.1" />
+  </ItemGroup>
+
+  <!-- netstandard2.0 and net472 lack System.Text.Json and the async interfaces. The language
+       features used here (patterns, collection expressions, file-scoped namespaces) are
+       compiler-only and need nothing but LangVersion. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0' or '$(TargetFramework)' == 'net472'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
+    <PackageReference Include="Nullable" Version="1.3.1" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- Reference assemblies so net472 builds on macOS and Linux without Mono. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+  <!-- ImplicitUsings does not emit the default set for these targets. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0' or '$(TargetFramework)' == 'net472'">
+    <Using Include="System" />
+    <Using Include="System.Collections.Generic" />
+    <Using Include="System.Linq" />
+    <Using Include="System.Net.Http" />
+    <Using Include="System.Threading" />
+    <Using Include="System.Threading.Tasks" />
+  </ItemGroup>
 
 </Project>

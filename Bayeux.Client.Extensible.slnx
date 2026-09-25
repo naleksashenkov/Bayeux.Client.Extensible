@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="Samples/Bayeux.Client.Extensible.Samples/Bayeux.Client.Extensible.Samples.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="Tests/Bayeux.Client.Extensible.IntegrationTests/Bayeux.Client.Extensible.IntegrationTests.csproj" />
+    <Project Path="Tests/Bayeux.Client.Extensible.Tests/Bayeux.Client.Extensible.Tests.csproj" />
+  </Folder>
+  <Project Path="Bayeux.Client.Extensible.csproj" />
+</Solution>
