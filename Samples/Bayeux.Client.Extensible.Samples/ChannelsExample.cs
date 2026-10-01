@@ -6,7 +6,6 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Bayeux.Client.Extensible.Authentication;
 using Bayeux.Client.Extensible.Core;
-using Bayeux.Client.Extensible.Core.Models;
 
 namespace Bayeux.Client.Extensible.Samples;
 
@@ -45,7 +44,7 @@ public static class ChannelsExample
 
         await using var poller = new CometDPoller(
             http,
-            new CometdPollerOptions(channels, "cometd"),
+            new PollerOptions(channels, "cometd"),
             NoAuthProvider.Instance,
             onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
 
@@ -70,6 +69,35 @@ public static class ChannelsExample
     }
 
     /// <summary>
+    /// Publishing, and the three outcomes worth handling differently.
+    /// </summary>
+    public static async Task RunPublishAsync(CometDPoller poller, CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Names go out in camelCase by default - PollerOptions.JsonSerializerOptions - which is
+            // what a server written in JavaScript expects. A class with OrderId would send orderId.
+            await poller.PublishAsync("/chat/room1", new { text = "hello", sentAt = DateTime.UtcNow }, cancellationToken);
+        }
+        catch (BayeuxPublishException ex)
+        {
+            // The server answered and refused this one message - typically no permission on the
+            // channel. Nothing was delivered, and the session is fine.
+            Console.WriteLine($"refused on {ex.Channel}: {ex.Error}");
+        }
+        catch (HttpRequestException ex)
+        {
+            // No answer, or an HTTP error: unknown whether the server delivered it. The poller never
+            // retries a publish, because repeating one can deliver it twice; decide here.
+            Console.WriteLine($"not confirmed: {ex.Message}");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Stopped waiting. Like a timeout, this cannot take back a message already sent.
+        }
+    }
+
+    /// <summary>
     /// The two ways a batch can fail, and why they are worth telling apart.
     /// </summary>
     public static async Task RunPartialFailureAsync(CometDPoller poller)
@@ -85,7 +113,7 @@ public static class ChannelsExample
         catch (BayeuxSubscriptionException ex)
         {
             // The server answered. Everything in Succeeded is subscribed and delivering; everything
-            // in Failures was rejected and has been rolled back, so Options.Channels still matches
+            // in Failures was rejected and has been rolled back, so poller.Channels still matches
             // what the server believes. Retrying only the failed channels is safe.
             Console.WriteLine($"subscribed: {string.Join(", ", ex.Succeeded)}");
 
@@ -120,7 +148,7 @@ public static class ChannelsExample
 
         await using var poller = new CometDPoller(
             http,
-            new CometdPollerOptions(channels, "cometd"),
+            new PollerOptions(channels, "cometd"),
             NoAuthProvider.Instance,
             onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
 

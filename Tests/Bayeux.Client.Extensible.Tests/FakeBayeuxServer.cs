@@ -50,6 +50,13 @@ public sealed class FakeBayeuxServer : IDisposable
     private int? _nextSubscribeHttpStatus;
     private int? _nextUnsubscribeHttpStatus;
     private string? _handshakeExtJson;
+    private int _failNextConnectsWithStatus;
+    private int _connectFailureStatus = 500;
+    private int _rejectNextHandshakes;
+    private string? _rejectedHandshakeReconnect = "none";
+    private readonly Queue<int> _scriptedConnects = new();
+    private (string Error, string? ExtJson)? _connectRefusal;
+    private string? _rejectedHandshakeExtJson;
     private readonly HashSet<string> _rejectedSubscriptions = new(StringComparer.Ordinal);
     private readonly HashSet<string> _rejectedUnsubscriptions = new(StringComparer.Ordinal);
 
@@ -117,6 +124,131 @@ public sealed class FakeBayeuxServer : IDisposable
         set { lock (_sync) _handshakeExtJson = value; }
     }
 
+    /// <summary>
+    /// How many of the next <c>/meta/connect</c> requests fail at the HTTP level with
+    /// <see cref="ConnectFailureStatus"/> - a restarting server, a proxy error - instead of being
+    /// answered.
+    /// </summary>
+    public int FailNextConnectsWithStatus
+    {
+        get { lock (_sync) return _failNextConnectsWithStatus; }
+        set { lock (_sync) _failNextConnectsWithStatus = value; }
+    }
+
+    /// <summary>The HTTP status for <see cref="FailNextConnectsWithStatus"/>. 500 by default.</summary>
+    public int ConnectFailureStatus
+    {
+        get { lock (_sync) return _connectFailureStatus; }
+        set { lock (_sync) _connectFailureStatus = value; }
+    }
+
+    /// <summary>
+    /// How many of the next handshakes are refused with <c>successful: false</c>, as a server
+    /// does for rejected credentials. Each refusal still counts in <see cref="HandshakeCount"/>.
+    /// </summary>
+    public int RejectNextHandshakes
+    {
+        get { lock (_sync) return _rejectNextHandshakes; }
+        set { lock (_sync) _rejectNextHandshakes = value; }
+    }
+
+    /// <summary>
+    /// <c>advice.reconnect</c> sent with a refused handshake: <c>none</c> by default, as CometD
+    /// sends when its security policy denies one; <c>null</c> sends no advice at all.
+    /// </summary>
+    public string? RejectedHandshakeReconnect
+    {
+        get { lock (_sync) return _rejectedHandshakeReconnect; }
+        set { lock (_sync) _rejectedHandshakeReconnect = value; }
+    }
+
+    /// <summary>
+    /// Refuses the next <c>/meta/connect</c> with <c>successful: false</c>, this error and advice
+    /// <c>none</c> - as Salesforce does with <c>401::Authentication invalid</c> for a revoked
+    /// token. Unlike <see cref="StopOnNextConnect"/>, which is a clean stop.
+    /// </summary>
+    /// <param name="error">The Bayeux error string.</param>
+    /// <param name="extJson">JSON for the reply's <c>ext</c>, or <c>null</c> for none.</param>
+    public void RefuseNextConnect(string error, string? extJson = null)
+    {
+        lock (_sync) _connectRefusal = (error, extJson);
+    }
+
+    private bool TakeConnectRefusal(out (string Error, string? ExtJson) refusal)
+    {
+        lock (_sync)
+        {
+            refusal = _connectRefusal ?? default;
+
+            if (_connectRefusal is null)
+                return false;
+
+            _connectRefusal = null;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// JSON for the <c>ext</c> of a refused handshake - where Salesforce puts the real cause under
+    /// <c>sfdc.failureReason</c>. <c>null</c> for none.
+    /// </summary>
+    public string? RejectedHandshakeExtJson
+    {
+        get { lock (_sync) return _rejectedHandshakeExtJson; }
+        set { lock (_sync) _rejectedHandshakeExtJson = value; }
+    }
+
+    /// <summary>
+    /// Answers the next <c>/meta/connect</c> requests in this order, one entry each: 200 as
+    /// usual, 402 with the Bayeux "unknown client" reply, anything else as that HTTP status.
+    /// Takes precedence over every other connect setting; once used up, those apply again.
+    /// </summary>
+    /// <remarks>
+    /// For sequences the counters cannot express, such as a failure, then a 402, then failures
+    /// again - the counters always play out one kind before the next.
+    /// </remarks>
+    public void ScriptConnects(params int[] responses)
+    {
+        lock (_sync)
+            foreach (var response in responses) _scriptedConnects.Enqueue(response);
+    }
+
+    private int? TakeScriptedConnect()
+    {
+        lock (_sync)
+            return _scriptedConnects.Count > 0 ? _scriptedConnects.Dequeue() : null;
+    }
+
+    // Read and decrement in one step: the poller can send the next request before a test thread
+    // would otherwise see the count go down.
+    private bool TakeConnectFailure(out int status)
+    {
+        lock (_sync)
+        {
+            status = _connectFailureStatus;
+
+            if (_failNextConnectsWithStatus <= 0)
+                return false;
+
+            _failNextConnectsWithStatus--;
+            return true;
+        }
+    }
+
+    private bool TakeHandshakeRejection(out string? reconnect)
+    {
+        lock (_sync)
+        {
+            reconnect = _rejectedHandshakeReconnect;
+
+            if (_rejectNextHandshakes <= 0)
+                return false;
+
+            _rejectNextHandshakes--;
+            return true;
+        }
+    }
+
     /// <summary>Makes this server reject a <c>/meta/subscribe</c> for each of these channels.</summary>
     public void RejectSubscribeFor(params string[] channels)
     {
@@ -129,6 +261,119 @@ public sealed class FakeBayeuxServer : IDisposable
     {
         lock (_sync)
             foreach (var channel in channels) _rejectedUnsubscriptions.Add(channel);
+    }
+
+    // ---- acknowledgements ----------------------------------------------------------------------
+
+    private bool _ackEnabled;
+    private bool _ackSession;
+    private long _ackBatch;
+    private bool _loseNextReplyWithEvents;
+    private readonly List<(long Batch, JsonObject Message)> _unacknowledged = new();
+    private readonly List<long?> _acksReceived = new();
+
+    /// <summary>
+    /// Whether this server supports the acknowledge extension. When on and the client asks for it
+    /// in the handshake, connect replies carry batch numbers, and events stay queued until the
+    /// client confirms them.
+    /// </summary>
+    public bool AckEnabled
+    {
+        get { lock (_sync) return _ackEnabled; }
+        set { lock (_sync) _ackEnabled = value; }
+    }
+
+    /// <summary>
+    /// Fails the next connect reply that carries events with HTTP 500 instead of sending it: the
+    /// events were taken off the queue, but never reached the client. A network failure at the
+    /// worst moment, which is exactly what acknowledgements exist for.
+    /// </summary>
+    public bool LoseNextReplyWithEvents
+    {
+        get { lock (_sync) return _loseNextReplyWithEvents; }
+        set { lock (_sync) _loseNextReplyWithEvents = value; }
+    }
+
+    /// <summary>
+    /// The <c>ext.ack</c> of every connect in the acknowledged session, in order: what the client
+    /// confirmed each time, or <c>null</c> when it sent none.
+    /// </summary>
+    public long?[] AcksReceivedSnapshot
+    {
+        get { lock (_sync) return _acksReceived.ToArray(); }
+    }
+
+    private bool IsAckSession
+    {
+        get { lock (_sync) return _ackSession; }
+    }
+
+    private bool HasUnacknowledged
+    {
+        get { lock (_sync) return _ackSession && _unacknowledged.Count > 0; }
+    }
+
+    private bool TakeLoseNextReply()
+    {
+        lock (_sync)
+        {
+            if (!_loseNextReplyWithEvents)
+                return false;
+
+            _loseNextReplyWithEvents = false;
+            return true;
+        }
+    }
+
+    // ---- publishing ----------------------------------------------------------------------------
+
+    private readonly List<JsonObject> _publishes = new();
+    private readonly HashSet<string> _rejectedPublishes = new(StringComparer.Ordinal);
+    private int? _nextPublishHttpStatus;
+    private bool _omitNextPublishReply;
+    private bool _echoPublishesInReply;
+
+    /// <summary>Every message the client published, as received, in order.</summary>
+    public JsonObject[] PublishesSnapshot
+    {
+        get { lock (_sync) return _publishes.Select(p => JsonNode.Parse(p.ToJsonString())!.AsObject()).ToArray(); }
+    }
+
+    /// <summary>Makes this server refuse a publish to each of these channels.</summary>
+    public void RejectPublishFor(params string[] channels)
+    {
+        lock (_sync)
+            foreach (var channel in channels) _rejectedPublishes.Add(channel);
+    }
+
+    /// <summary>Fails the next publish at the HTTP level instead of answering it.</summary>
+    public int? NextPublishHttpStatus
+    {
+        get { lock (_sync) return _nextPublishHttpStatus; }
+        set { lock (_sync) _nextPublishHttpStatus = value; }
+    }
+
+    /// <summary>Answers the next publish with an empty array, as no conforming server would.</summary>
+    public bool OmitNextPublishReply
+    {
+        get { lock (_sync) return _omitNextPublishReply; }
+        set { lock (_sync) _omitNextPublishReply = value; }
+    }
+
+    /// <summary>
+    /// Delivers an accepted publish back in the same reply, ahead of the acknowledgement - what
+    /// CometD does when the publisher is itself subscribed and the session queue is flushed onto
+    /// the publish response. Off by default: the message then waits for the next connect.
+    /// </summary>
+    public bool EchoPublishesInReply
+    {
+        get { lock (_sync) return _echoPublishesInReply; }
+        set { lock (_sync) _echoPublishesInReply = value; }
+    }
+
+    private bool IsPublishRejected(string channel)
+    {
+        lock (_sync) return _rejectedPublishes.Contains(channel);
     }
 
     private bool IsSubscribeRejected(string channel)
@@ -248,6 +493,30 @@ public sealed class FakeBayeuxServer : IDisposable
                 return;
             }
 
+            if (path is "/cometd" && NextPublishHttpStatus is { } publishStatus)
+            {
+                NextPublishHttpStatus = null;
+                ctx.Response.StatusCode = publishStatus;
+                ctx.Response.Close();
+                return;
+            }
+
+            var scripted = path is "/cometd/connect" ? TakeScriptedConnect() : null;
+
+            if (scripted is { } scriptedStatus && scriptedStatus != 200 && scriptedStatus != 402)
+            {
+                ctx.Response.StatusCode = scriptedStatus;
+                ctx.Response.Close();
+                return;
+            }
+
+            if (scripted is null && path is "/cometd/connect" && TakeConnectFailure(out var connectStatus))
+            {
+                ctx.Response.StatusCode = connectStatus;
+                ctx.Response.Close();
+                return;
+            }
+
             // A Bayeux request is always an array, and this client batches subscribes and
             // unsubscribes into one. Answer every message in it, not just the first.
             var reply = new JsonArray();
@@ -259,17 +528,27 @@ public sealed class FakeBayeuxServer : IDisposable
 
                 var messages = path switch
                 {
-                    "/cometd/handshake" => Handshake(ctx, id),
+                    "/cometd/handshake" => Handshake(ctx, request, id),
                     "/cometd/subscribe" => Subscribe(request, id),
                     "/cometd/unsubscribe" => Unsubscribe(request, id),
-                    "/cometd/connect" => await ConnectAsync(request, id).ConfigureAwait(false),
+                    "/cometd/connect" => await ConnectAsync(request, id, scripted).ConfigureAwait(false),
                     "/cometd/disconnect" => Disconnect(id),
+                    // Application messages go to the base path; meta messages carry their type.
+                    "/cometd" => HandlePublish(request, id),
                     _ => new JsonArray()
                 };
 
                 // Re-parsed because a JsonNode cannot belong to two parents.
                 foreach (var message in messages)
                     reply.Add(JsonNode.Parse(message!.ToJsonString()));
+            }
+
+            // The reply is ready and its events are off the queue; then the connection fails.
+            if (path is "/cometd/connect" && reply.Count > 1 && TakeLoseNextReply())
+            {
+                ctx.Response.StatusCode = 500;
+                ctx.Response.Close();
+                return;
             }
 
             var payload = Encoding.UTF8.GetBytes(reply.ToJsonString());
@@ -285,9 +564,76 @@ public sealed class FakeBayeuxServer : IDisposable
         }
     }
 
-    private JsonArray Handshake(HttpListenerContext ctx, string? id)
+    private JsonArray HandlePublish(JsonObject request, string? id)
+    {
+        var channel = request["channel"]!.GetValue<string>();
+
+        lock (_sync) _publishes.Add(JsonNode.Parse(request.ToJsonString())!.AsObject());
+
+        if (OmitNextPublishReply)
+        {
+            OmitNextPublishReply = false;
+            return new JsonArray();
+        }
+
+        if (IsPublishRejected(channel))
+            return new JsonArray(new JsonObject
+            {
+                ["channel"] = channel,
+                ["successful"] = false,
+                ["error"] = $"403:{channel}:Publish denied",
+                ["id"] = id
+            });
+
+        // Broadcast: the message reaches subscribers - the publisher among them - as an event
+        // with data and no "successful".
+        var delivered = new JsonObject
+        {
+            ["channel"] = channel,
+            ["data"] = request["data"] is { } data ? JsonNode.Parse(data.ToJsonString()) : null
+        };
+
+        var reply = new JsonArray();
+
+        if (EchoPublishesInReply)
+            reply.Add(delivered);
+        else
+            PendingEvents.Enqueue(delivered);
+
+        // The acknowledgement: the same channel and id, "successful", no data.
+        reply.Add(new JsonObject
+        {
+            ["channel"] = channel,
+            ["successful"] = true,
+            ["id"] = id
+        });
+
+        return reply;
+    }
+
+    private JsonArray Handshake(HttpListenerContext ctx, JsonObject request, string? id)
     {
         Interlocked.Increment(ref HandshakeCount);
+
+        if (TakeHandshakeRejection(out var reconnect))
+        {
+            var refusal = new JsonObject
+            {
+                ["channel"] = "/meta/handshake",
+                ["successful"] = false,
+                ["error"] = "403::Handshake denied",
+                ["id"] = id
+            };
+
+            if (reconnect is not null)
+                refusal["advice"] = new JsonObject { ["reconnect"] = reconnect, ["interval"] = 0 };
+
+            if (RejectedHandshakeExtJson is { } refusalExt)
+                refusal["ext"] = JsonNode.Parse(refusalExt);
+
+            return new JsonArray(refusal);
+        }
+
         var clientId = "cid-" + Interlocked.Increment(ref _clientSeq);
         _currentClientId = clientId;
 
@@ -311,6 +657,22 @@ public sealed class FakeBayeuxServer : IDisposable
 
         if (HandshakeExtJson is { } ext)
             reply["ext"] = JsonNode.Parse(ext);
+
+        // Acknowledgements, when both sides want them. A new session starts with an empty queue.
+        var clientAsksForAck = request["ext"]?["ack"] is JsonValue asked && asked.TryGetValue<bool>(out var yes) && yes;
+
+        lock (_sync)
+        {
+            _ackSession = AckEnabled && clientAsksForAck;
+            _unacknowledged.Clear();
+            _ackBatch = 0;
+        }
+
+        if (IsAckSession)
+        {
+            reply["ext"] ??= new JsonObject();
+            reply["ext"]!["ack"] = true;
+        }
 
         return new JsonArray(reply);
     }
@@ -394,32 +756,49 @@ public sealed class FakeBayeuxServer : IDisposable
         });
     }
 
-    private async Task<JsonArray> ConnectAsync(JsonObject request, string? id)
+    /// <param name="scripted">The entry from <see cref="ScriptConnects"/> for this request, if any.</param>
+    private async Task<JsonArray> ConnectAsync(JsonObject request, string? id, int? scripted)
     {
-        if (StopOnNextConnect)
+        if (scripted == 402)
+            return Reply402(id);
+
+        // A clean stop: the connect succeeded, and the server advises not to reconnect.
+        if (scripted is null && StopOnNextConnect)
         {
             StopOnNextConnect = false;
             return new JsonArray(new JsonObject
             {
                 ["channel"] = "/meta/connect",
-                ["successful"] = false,
-                ["error"] = "403::Forbidden",
+                ["clientId"] = request["clientId"]?.GetValue<string>(),
+                ["successful"] = true,
                 ["id"] = id,
                 ["advice"] = new JsonObject { ["reconnect"] = "none" }
             });
         }
 
-        if (FailNextConnectsWith402 > 0)
+        // A refusal: the connect failed, with the same advice.
+        if (scripted is null && TakeConnectRefusal(out var refusal))
         {
-            FailNextConnectsWith402--;
-            return new JsonArray(new JsonObject
+            var refused = new JsonObject
             {
                 ["channel"] = "/meta/connect",
+                ["clientId"] = request["clientId"]?.GetValue<string>(),
                 ["successful"] = false,
-                ["error"] = "402::Unknown client",
+                ["error"] = refusal.Error,
                 ["id"] = id,
-                ["advice"] = new JsonObject { ["reconnect"] = "handshake", ["interval"] = 0 }
-            });
+                ["advice"] = new JsonObject { ["reconnect"] = "none", ["interval"] = 0 }
+            };
+
+            if (refusal.ExtJson is not null)
+                refused["ext"] = JsonNode.Parse(refusal.ExtJson);
+
+            return new JsonArray(refused);
+        }
+
+        if (scripted is null && FailNextConnectsWith402 > 0)
+        {
+            FailNextConnectsWith402--;
+            return Reply402(id);
         }
 
         var advice = new JsonObject { ["reconnect"] = "retry", ["interval"] = 0 };
@@ -442,19 +821,66 @@ public sealed class FakeBayeuxServer : IDisposable
         var clientId = request["clientId"]?.GetValue<string>();
         bool IsCurrent() => clientId == _currentClientId;
 
-        // Emulate the long poll: hold briefly, then flush whatever is queued.
+        // Emulate the long poll: hold briefly, then flush whatever is queued - including, with
+        // acknowledgements, anything sent before and not yet confirmed.
         for (var i = 0; i < 40 && !_cts.IsCancellationRequested; i++)
         {
-            if (IsCurrent() && !PendingEvents.IsEmpty) break;
+            if (IsCurrent() && (!PendingEvents.IsEmpty || HasUnacknowledged)) break;
             await Task.Delay(25).ConfigureAwait(false);
         }
 
-        if (IsCurrent())
+        if (!IsCurrent())
+            return reply;
+
+        if (!IsAckSession)
+        {
             while (PendingEvents.TryDequeue(out var queued))
                 reply.Add(queued);
 
+            return reply;
+        }
+
+        // Acknowledgements: what the client confirmed is dropped; what it has not is sent again,
+        // together with anything new, as the latest batch.
+        var confirmed = request["ext"]?["ack"]?.GetValue<long>();
+
+        lock (_sync)
+        {
+            _acksReceived.Add(confirmed);
+
+            if (confirmed is { } upTo)
+                _unacknowledged.RemoveAll(entry => entry.Batch <= upTo);
+
+            var fresh = new List<JsonObject>();
+            while (PendingEvents.TryDequeue(out var queued))
+                fresh.Add(queued);
+
+            if (fresh.Count > 0)
+            {
+                _ackBatch++;
+                _unacknowledged.AddRange(fresh.Select(message => (_ackBatch, message)));
+            }
+
+            foreach (var (_, message) in _unacknowledged)
+                reply.Add(JsonNode.Parse(message.ToJsonString()));
+
+            if (_unacknowledged.Count > 0)
+                reply[0]!["ext"] = new JsonObject { ["ack"] = _ackBatch };
+        }
+
         return reply;
     }
+
+    // The server no longer knows the session and asks for a new handshake.
+    private static JsonArray Reply402(string? id) =>
+        new(new JsonObject
+        {
+            ["channel"] = "/meta/connect",
+            ["successful"] = false,
+            ["error"] = "402::Unknown client",
+            ["id"] = id,
+            ["advice"] = new JsonObject { ["reconnect"] = "handshake", ["interval"] = 0 }
+        });
 
     private JsonArray Disconnect(string? id)
     {

@@ -5,9 +5,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Bayeux.Client.Extensible.Authentication;
-using Bayeux.Client.Extensible.Authentication.Models;
 using Bayeux.Client.Extensible.Core;
-using Bayeux.Client.Extensible.Core.Models;
 
 namespace Bayeux.Client.Extensible.Samples;
 
@@ -29,7 +27,7 @@ public static class BasicAuthExample
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels["/topic/orders"] = (e, _) => { Console.WriteLine($"order: {e.Data}"); return Task.CompletedTask; };
 
-        var options = new CometdPollerOptions(channels, "cometd");
+        var options = new PollerOptions(channels, "cometd");
 
         // Keep the provider: it is how credentials are rotated later.
         var auth = new HttpBasicAuthProvider(new BasicAuthCredentials(user, password));

@@ -107,4 +107,8 @@
     <Using Include="System.Threading.Tasks" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bayeux.Client.Extensible.Tests" />
+  </ItemGroup>
+
 </Project>

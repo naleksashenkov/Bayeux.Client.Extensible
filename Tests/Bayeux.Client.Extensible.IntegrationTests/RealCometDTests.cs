@@ -6,9 +6,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
 using Bayeux.Client.Extensible.Authentication;
-using Bayeux.Client.Extensible.Authentication.EventModels;
 using Bayeux.Client.Extensible.Core;
-using Bayeux.Client.Extensible.Core.Models;
 using Xunit;
 
 namespace Bayeux.Client.Extensible.IntegrationTests;
@@ -37,12 +35,12 @@ public class RealCometDTests
         await control.GetStringAsync("control/" + action);
     }
 
-    private static (CometdPollerOptions options, ConcurrentQueue<JsonElement> received) Options(string channel)
+    private static (PollerOptions options, ConcurrentQueue<JsonElement> received) Options(string channel)
     {
         var received = new ConcurrentQueue<JsonElement>();
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels[channel] = (e, _) => { received.Enqueue(e.Data); return Task.CompletedTask; };
-        return (new CometdPollerOptions(channels, "cometd"), received);
+        return (new PollerOptions(channels, "cometd"), received);
     }
 
     private static async Task<bool> WaitForAsync(Func<bool> condition, int timeoutMs = 15000)
@@ -199,8 +197,8 @@ public class RealCometDTests
 
         await poller.UnsubscribeChannelsAsync(["/topic/batch-a", "/topic/batch-b"]);
 
-        Assert.DoesNotContain("/topic/batch-a", options.Channels.Keys);
-        Assert.DoesNotContain("/topic/batch-b", options.Channels.Keys);
+        Assert.DoesNotContain("/topic/batch-a", poller.Channels.Keys);
+        Assert.DoesNotContain("/topic/batch-b", poller.Channels.Keys);
 
         var seen = a.Count + b.Count;
 
@@ -210,5 +208,67 @@ public class RealCometDTests
 
         // The server must have dropped both subscriptions, not just the first message in the array.
         Assert.False(await WaitForAsync(() => a.Count + b.Count > seen, 2500));
+    }
+
+    [SkippableFact]
+    public async Task The_reference_server_agrees_to_acknowledgements_and_still_delivers()
+    {
+        Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
+
+        // The wire format checked against CometD's own extension: it agrees in the handshake,
+        // numbers the batches, and reads back the confirmations - and events still arrive, once.
+        using var http = CreateClient();
+        var received = new ConcurrentQueue<JsonElement>();
+        var ack = new BayeuxAckExtension();
+
+        var options = new PollerOptions(
+            new Dictionary<string, BayeuxEventHandler> { ["/topic/acked"] = (e, _) => { received.Enqueue(e.Data); return Task.CompletedTask; } },
+            "cometd",
+            extensions: [ack]);
+
+        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await poller.ConnectAsync();
+
+        Assert.True(ack.IsAckSupported);
+
+        await Task.Delay(500);
+        await ControlAsync("publish?channel=/topic/acked&text=one");
+        Assert.True(await WaitForAsync(() => received.Count == 1));
+
+        await ControlAsync("publish?channel=/topic/acked&text=two");
+        Assert.True(await WaitForAsync(() => received.Count == 2));
+
+        // Confirmed batches are not sent again.
+        await Task.Delay(2500);
+        Assert.Equal(new[] { "one", "two" }, received.Select(d => d.GetProperty("text").GetString()));
+    }
+
+    [SkippableFact]
+    public async Task A_message_published_by_one_poller_reaches_another_and_its_publisher()
+    {
+        Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
+
+        // Everything the fake server only imitates, checked against the reference: the publish goes
+        // to the base path, the reply is recognised by id, and CometD delivers to every subscriber
+        // of the channel - the publisher included.
+        using var http = CreateClient();
+        var (subscriberOptions, subscriberReceived) = Options("/chat/real");
+        var (publisherOptions, publisherReceived) = Options("/chat/real");
+
+        await using var subscriber = new CometDPoller(http, subscriberOptions, NoAuthProvider.Instance, (_, _) => { });
+        await using var publisher = new CometDPoller(http, publisherOptions, NoAuthProvider.Instance, (_, _) => { });
+        await subscriber.ConnectAsync();
+        await publisher.ConnectAsync();
+
+        await publisher.PublishAsync("/chat/real", new { text = "from-client" });
+
+        Assert.True(await WaitForAsync(() => subscriberReceived.Count >= 1 && publisherReceived.Count >= 1));
+
+        // Anything more would show by now - above all the acknowledgement, which travels on the
+        // same channel and must not reach a handler as a second, empty event.
+        await Task.Delay(2500);
+
+        Assert.Equal("from-client", Assert.Single(subscriberReceived).GetProperty("text").GetString());
+        Assert.Equal("from-client", Assert.Single(publisherReceived).GetProperty("text").GetString());
     }
 }

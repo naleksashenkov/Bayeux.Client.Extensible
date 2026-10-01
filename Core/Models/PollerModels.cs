@@ -4,9 +4,8 @@
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Bayeux.Client.Extensible.Core.Constants;
 
-namespace Bayeux.Client.Extensible.Core.Models
+namespace Bayeux.Client.Extensible.Core
 {
     /// <summary>What the polling loop should do after processing one <c>/meta/connect</c> response.</summary>
     public enum ConnectResult
@@ -35,15 +34,17 @@ namespace Bayeux.Client.Extensible.Core.Models
         TokenCancellation,
 
         /// <summary>
-        /// The server ended the session &#8212; either <c>advice.reconnect: "none"</c> or a
-        /// server-sent <c>/meta/disconnect</c>. No disconnect request is sent in this case,
-        /// because the session is already closed.
+        /// The server ended the session cleanly &#8212; a successful reply advising
+        /// <c>reconnect: "none"</c>, or a server-sent <c>/meta/disconnect</c>. No disconnect request
+        /// is sent in this case, because the session is already closed. A <em>refused</em> connect
+        /// (<c>successful: false</c> with that advice) is <see cref="Failed"/> instead, with a
+        /// <see cref="BayeuxConnectException"/> carrying the server's reason.
         /// </summary>
         ServerRequirement,
 
         /// <summary>
         /// An error ended the loop. The cause is carried by
-        /// <see cref="Bayeux.Client.Extensible.Authentication.EventModels.OnPollerDisconnectedEventArgs.Error"/>.
+        /// <see cref="OnPollerDisconnectedEventArgs.Error"/>.
         /// </summary>
         Failed
     }
@@ -107,11 +108,19 @@ namespace Bayeux.Client.Extensible.Core.Models
         public string RequestId { get; set; }
 
         /// <summary>
-        /// The last segment of <see cref="Channel"/>, used to build the request URI
-        /// (<c>/meta/connect</c> becomes <c>connect</c>). Not serialized.
+        /// What is appended to the endpoint path for this message: the last segment of a meta
+        /// channel (<c>/meta/connect</c> becomes <c>connect</c>), or <c>null</c> for an application
+        /// message, which goes to the base path itself. Not serialized.
         /// </summary>
+        /// <remarks>
+        /// CometD clients append the type for meta messages only. Appending the last segment of an
+        /// application channel would send a publish on <c>/chat/room1</c> to <c>{path}/room1</c>,
+        /// which a server accepts only by the accident of mapping everything below its path.
+        /// </remarks>
         [JsonIgnore]
-        public string Endpoint => Channel.Substring(Channel.LastIndexOf('/') + 1);
+        public string? Endpoint => Channel.StartsWith(CometDConstants.MetaChannels.Meta, StringComparison.Ordinal) 
+            ? Channel.Substring(Channel.LastIndexOf('/') + 1)
+            : null;
 
         /// <summary>
         /// Extension data for this message: the protocol's own extension point, keyed by extension name
@@ -332,5 +341,25 @@ namespace Bayeux.Client.Extensible.Core.Models
         /// </summary>
         [JsonPropertyName("multiple-clients")]
         public bool? IsMultipleClients { get; set; }
+    }
+
+    /// <summary>A message published to an application channel.</summary>
+    public class PublishRequestModel : BaseLongPollingRequestModel
+    {
+        /// <summary>
+        /// The payload. <c>PublishAsync</c> passes it already serialized - a <see cref="JsonElement"/>
+        /// written with the poller's <c>JsonSerializerOptions</c> - so the protocol's own fields
+        /// and the application's data each follow their own naming rules.
+        /// </summary>
+        [JsonPropertyName("data")]
+        public object? Data { get; set; }
+
+        /// <summary>Creates a publish request.</summary>
+        /// <param name="clientId">The session id from the handshake.</param>
+        /// <param name="channel">The application channel to publish to.</param>
+        /// <param name="data">The payload.</param>
+        /// <param name="requestId">Client-generated message id, echoed in the reply.</param>
+        public PublishRequestModel(string clientId, string channel, object? data, string requestId)
+        : base(clientId, channel, requestId) => Data = data;
     }
 }

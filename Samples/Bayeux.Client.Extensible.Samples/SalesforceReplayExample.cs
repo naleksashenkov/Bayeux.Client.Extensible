@@ -3,9 +3,7 @@
 // See LICENSE in the repository root for full license information.
 
 using System.Text.Json;
-using Bayeux.Client.Extensible.Authentication.EventModels;
 using Bayeux.Client.Extensible.Core;
-using Bayeux.Client.Extensible.Core.Models;
 
 namespace Bayeux.Client.Extensible.Samples;
 
@@ -46,60 +44,77 @@ public static class SalesforceReplayExample
         // IAuthProvider. The extension handles the message level; neither knows about the other.
         var auth = new BearerTokenAuthProvider(await getAccessToken(CancellationToken.None));
 
-        var stopped = NewStopSignal();
+        // A lost session is re-established by the poller itself. Before each attempt: save the
+        // positions - if this process dies from here on, the next run still resumes from the last
+        // event it saw - and fetch a fresh token, in case the old one is the cause. The same
+        // extension then resubscribes from the last id it recorded, so nothing published while we
+        // were away is lost - within the retention window.
+        var reconnect = new ReconnectOptions(
+            maxDelay: TimeSpan.FromMinutes(1),
+            // A revoked token is retried here, and only here, because a new one is fetched first;
+            // the default rule refuses it to protect accounts from lockout.
+            shouldRetry: e => IsRevokedToken(e) || ReconnectOptions.IsRetriable(e),
+            beforeAttemptAsync: async ct =>
+            {
+                SaveReplayIds(replayIdsFile, replay.GetReplayIds());
+                auth.UpdateCredentials(await getAccessToken(ct));
+            });
+
+        var stopped = new TaskCompletionSource<OnPollerDisconnectedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var poller = new CometDPoller(
             http,
             // The API version is part of the path. Durable streaming needs 37.0 or later; ids in the
             // /meta/connect reply need 68.0.
-            new CometdPollerOptions(channels, "cometd/68.0", extensions: [replay]),
+            new PollerOptions(channels, "cometd/68.0", extensions: [replay], reconnectOptions: reconnect),
             auth,
-            // The handler reads the variable, not the object, so replacing it below re-arms it.
+            // Raised only when the poller gives up, the server tells it to stop, or we stop it.
             onPollerDisconnected: (_, e) => stopped.TrySetResult(e));
 
         await poller.ConnectAsync();
         Console.WriteLine($"Replay agreed by the server: {replay.IsSupported}");
 
-        var deadline = DateTime.UtcNow + runFor;
-
-        while (true)
+        if (await Task.WhenAny(stopped.Task, Task.Delay(runFor)) == stopped.Task)
         {
-            var remaining = deadline - DateTime.UtcNow;
-
-            if (remaining <= TimeSpan.Zero)
-                break;
-
-            if (await Task.WhenAny(stopped.Task, Task.Delay(remaining)) != stopped.Task)
-                break;                                     // time is up, still connected
-
             var outcome = await stopped.Task;
-
-            // Saved at every stop, not only at the end: if this process dies from here on, the next
-            // run still resumes from the last event it saw.
-            SaveReplayIds(replayIdsFile, replay.GetReplayIds());
-
-            // The server told us to stop, or we did. Neither is a reason to reconnect.
-            if (outcome.Reason != DisconnectReason.Failed)
-                return;
-
-            // Usually an expired access token. A fresh token for the same provider, the same
-            // extension: the resubscribe asks for everything after the last id it recorded, so
-            // nothing published while we were away is lost - within the retention window.
-            Console.WriteLine($"Session lost ({outcome.Error?.Message}); reconnecting.");
-
-            auth.UpdateCredentials(await getAccessToken(CancellationToken.None));
-            stopped = NewStopSignal();
-
-            await Task.Delay(TimeSpan.FromSeconds(5));      // never retry as fast as the server refuses
-            await poller.ConnectAsync();
+            Console.WriteLine($"Stopped: {outcome.Reason} {outcome.Error?.Message}");
+        }
+        else
+        {
+            await poller.DisconnectAsync();                // time is up, still connected
         }
 
-        await poller.DisconnectAsync();
         SaveReplayIds(replayIdsFile, replay.GetReplayIds());
     }
 
-    private static TaskCompletionSource<OnPollerDisconnectedEventArgs> NewStopSignal() =>
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>Whether Salesforce refused because the access token is no longer valid.</summary>
+    /// <remarks>
+    /// Salesforce does not answer with HTTP 401. A revoked token arrives as a Bayeux refusal on
+    /// <c>/meta/connect</c> with <c>401::Authentication invalid</c>, or - if it is discovered on a
+    /// new handshake - as <c>403::Handshake denied</c> with the real cause under
+    /// <c>ext.sfdc.failureReason</c>. Both come with advice <c>none</c>, which the default rule
+    /// honours. A token is not a password, and a fresh one is fetched before every attempt, so
+    /// retrying these cannot lock anything.
+    /// </remarks>
+    private static bool IsRevokedToken(Exception error) => error switch
+    {
+        BayeuxConnectException connect =>
+            connect.Error?.StartsWith("401::", StringComparison.Ordinal) == true
+            || FailureReason(connect.Ext)?.StartsWith("401::", StringComparison.Ordinal) == true,
+        BayeuxHandshakeException handshake =>
+            FailureReason(handshake.Ext)?.StartsWith("401::", StringComparison.Ordinal) == true,
+        _ => false,
+    };
+
+    // Salesforce's own detail, under ext.sfdc.failureReason.
+    private static string? FailureReason(IReadOnlyDictionary<string, JsonElement>? ext) =>
+        ext is not null
+        && ext.TryGetValue("sfdc", out var sfdc)
+        && sfdc.ValueKind == JsonValueKind.Object
+        && sfdc.TryGetProperty("failureReason", out var reason)
+        && reason.ValueKind == JsonValueKind.String
+            ? reason.GetString()
+            : null;
 
     private static IReadOnlyDictionary<string, JsonElement>? LoadReplayIds(string path) =>
         File.Exists(path)

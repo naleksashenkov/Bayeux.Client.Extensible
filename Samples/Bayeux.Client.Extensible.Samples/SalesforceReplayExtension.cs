@@ -4,8 +4,7 @@
 
 using System.Collections.Concurrent;
 using System.Text.Json;
-using Bayeux.Client.Extensible.Core.Models;
-using Bayeux.Client.Extensible.Interfaces;
+using Bayeux.Client.Extensible.Core;
 
 namespace Bayeux.Client.Extensible.Samples;
 
@@ -36,7 +35,7 @@ namespace Bayeux.Client.Extensible.Samples;
 /// from subscribe calls at the same time, so all state here is thread-safe.
 /// </para>
 /// </remarks>
-public sealed class SalesforceReplayExtension : IBayeuxExt
+public sealed class SalesforceReplayExtension : IBayeuxExtension
 {
     private const string ExtensionKey = "replay";
 

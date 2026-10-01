@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0.
 // See LICENSE in the repository root for full license information.
 
-namespace Bayeux.Client.Extensible.Authentication.Models
+namespace Bayeux.Client.Extensible.Authentication
 {
     /// <summary>User name and password for HTTP Basic authentication.</summary>
     public class BasicAuthCredentials

@@ -31,13 +31,40 @@ tag `vx.y.z`. The release workflow refuses to publish a version that has no sect
 - Batched subscribe and unsubscribe: a whole set of channels travels as one Bayeux message.
   A partial rejection raises `BayeuxSubscriptionException` naming both the accepted and the
   rejected channels; a transport failure rolls the entire batch back and propagates unchanged.
+- `PublishAsync`: one message to an application channel, sent to the base path as CometD
+  clients do. A refusal throws `BayeuxPublishException`; failures go to the caller, not
+  `OnError`, and a publish is never retried. The reply to a publish is not delivered as an event,
+  and a subscriber receives its own messages, as CometD delivers them.
 - Cookie isolation per poller, so several pollers can share one `HttpClient` without their
   sessions collapsing into one.
+- Each poller owns its subscription list, `IBayeuxPoller.Channels`. `PollerOptions.Channels` is
+  only the starting set, so several pollers can share one options object - a DI singleton, say -
+  without seeing each other's subscribe and unsubscribe.
 - Optional `ILogger` support. Nothing is logged when none is supplied, and request and response
   bodies are never logged.
-- `ext` on every message, and `IBayeuxExt` to read and write it: outgoing before serialisation,
-  incoming before the poller and any handler. Registered through `CometdPollerOptions`; a failing
+- `ext` on every message, and `IBayeuxExtension` to read and write it: outgoing before serialisation,
+  incoming before the poller and any handler. Registered through `PollerOptions`; a failing
   extension is reported as `ErrorSource.Ext`.
+- Opt-in reconnection through `PollerOptions.ReconnectOptions`: after an error the poller waits -
+  exponential backoff with full jitter - then tries again. After a transport failure it retries
+  `/meta/connect` in the same session, keeping whatever the server queued meanwhile; after a
+  refusal it handshakes and resubscribes. Only errors that can clear by themselves are retried by
+  default (`ReconnectOptions.IsRetriable`); 401, 403 and a handshake the server advises against
+  repeating are not. `ShouldRetry` replaces that rule,
+  `BeforeAttemptAsync` refreshes credentials before each attempt, and `MaxAttempts` caps them.
+  `ConnectAsync` itself is never retried.
+- Typed data: `BayeuxHandler.Of<T>` and `BayeuxEvent.GetData<T>()` read an event's data as an
+  object, and `PublishAsync` writes one, both with `PollerOptions.JsonSerializerOptions` -
+  `JsonSerializerDefaults.Web`, camelCase, by default.
+- `BayeuxAckExtension`: the acknowledge extension. The server keeps events until the client
+  confirms them and sends them again if a reply was lost, making delivery at-least-once within a
+  session. Confirmation follows the handlers, so acknowledged means handled.
+- `BayeuxHttpException`, carrying the HTTP status on every target framework, and
+  `BayeuxHandshakeException` and `BayeuxConnectException`, carrying the server's error, reconnect
+  advice and `ext`. A connect the server *refuses* with advice `none` now ends the session as
+  `Failed` with a `BayeuxConnectException`, so its reason reaches the caller; only a clean stop - a
+  successful reply advising `none`, or a server-sent `/meta/disconnect` - is `ServerRequirement`.
+  This is how Salesforce reports a revoked access token.
 - Salesforce durable replay as a sample in `Samples/`, including positions saved across restarts.
 - Multi-targeting: `net10.0`, `netstandard2.0` and `net472`.
 - Source Link, deterministic CI builds and a symbol package.
@@ -45,9 +72,7 @@ tag `vx.y.z`. The release workflow refuses to publish a version that has no sect
 ### Known limitations
 
 - Long-polling only; there is no WebSocket transport.
-- No automatic retry. Any error ends the session, and reconnecting is the caller's decision.
-- Delivery is at-most-once: the acknowledge extension is not implemented, so a session break
-  loses whatever was still queued on the server.
-- The client cannot publish to a channel yet.
+- A session that ends - by expiry or a new handshake - loses whatever was still queued for it on
+  the server, with or without acknowledgements.
 
 [Unreleased]: https://github.com/naleksashenkov/Bayeux.Client.Extensible/commits/main

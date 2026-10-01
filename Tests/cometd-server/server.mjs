@@ -8,6 +8,10 @@ const server = cometd.createCometDServer({
     logLevel: 'info'
 });
 
+// Acknowledgements, for clients that ask for them in the handshake. Enabled per session, so a client
+// that does not ask - every other test - sees no difference.
+server.addExtension(new cometd.AcknowledgedMessagesExtension());
+
 const stats = { handshakes: 0, subscribes: 0, disconnects: 0, sessions: [] };
 
 server.addListener('sessionAdded', (session) => {

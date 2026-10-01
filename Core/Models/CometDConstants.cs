@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0.
 // See LICENSE in the repository root for full license information.
 
-namespace Bayeux.Client.Extensible.Core.Constants
+namespace Bayeux.Client.Extensible.Core
 {
     /// <summary>
     /// Names fixed by the Bayeux protocol: meta channels and <c>advice.reconnect</c> values.
@@ -10,7 +10,7 @@ namespace Bayeux.Client.Extensible.Core.Constants
     /// <remarks>
     /// Internal on purpose: a public constant is a promise that outlives every version, and these
     /// names are fixed by the protocol anyway, so code outside the library - an
-    /// <c>IBayeuxExt</c> implementation above all - spells them out itself.
+    /// <c>IBayeuxExtension</c> implementation above all - spells them out itself.
     /// </remarks>
     internal static class CometDConstants
     {

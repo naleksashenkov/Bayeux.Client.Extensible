@@ -2,15 +2,13 @@
 // Licensed under the Apache License, Version 2.0.
 // See LICENSE in the repository root for full license information.
 
-using Bayeux.Client.Extensible.Core.Models;
-
-namespace Bayeux.Client.Extensible.Interfaces
+namespace Bayeux.Client.Extensible.Core
 {
     /// <summary>
     /// Reads and writes the <c>ext</c> field of Bayeux messages - the protocol's own extension
     /// point, used by acknowledgement, time sync, Salesforce replay and ext-based authentication.
     /// </summary>
-    public interface IBayeuxExt
+    public interface IBayeuxExtension
     {
         /// <summary>
         /// Called for every outgoing message, before it is serialised. May add to

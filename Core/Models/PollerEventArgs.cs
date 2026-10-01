@@ -2,46 +2,13 @@
 // Licensed under the Apache License, Version 2.0.
 // See LICENSE in the repository root for full license information.
 
-using Bayeux.Client.Extensible.Core.Models;
-
-namespace Bayeux.Client.Extensible.Authentication.EventModels
+namespace Bayeux.Client.Extensible.Core
 {
-    /// <summary>Reports the outcome of replacing an authentication provider's credentials.</summary>
-    /// <remarks>
-    /// This describes only whether the provider could encode the new credentials locally. Whether
-    /// the server accepts them is not known until the next request is answered.
-    /// </remarks>
-    public class OnCredentialsUpdatedEventArgs : EventArgs
-    {
-        /// <summary>Whether the credentials were replaced.</summary>
-        public bool IsSuccess { get; }
-
-        /// <summary>Why the replacement failed, or <c>null</c> when it succeeded.</summary>
-        public Exception? Error { get; }
-
-        /// <summary>Creates the arguments.</summary>
-        /// <param name="isSuccess">Whether the credentials were replaced.</param>
-        /// <param name="error">The failure, if any.</param>
-        public OnCredentialsUpdatedEventArgs(bool isSuccess, Exception? error = null)
-        {
-            IsSuccess = isSuccess;
-            Error = error;
-        }
-
-        /// <summary>Creates the arguments, deriving success from the presence of an error.</summary>
-        /// <param name="error">The failure, or <c>null</c> for success.</param>
-        /// <returns>The event arguments.</returns>
-        public static OnCredentialsUpdatedEventArgs Create(Exception? error = null) =>
-            new OnCredentialsUpdatedEventArgs(
-                error == null,
-                error);
-    }
-
     /// <summary>
     /// Reports that the polling loop has stopped. Raised exactly once per connection, and only
     /// after a connection was established &#8212; a failed <c>ConnectAsync</c> throws instead.
     /// </summary>
-    public class OnPollerDisconnectedEventArgs : EventArgs
+    public sealed class OnPollerDisconnectedEventArgs : EventArgs
     {
         /// <summary>Why the loop stopped.</summary>
         public DisconnectReason Reason { get; }
@@ -89,7 +56,7 @@ namespace Bayeux.Client.Extensible.Authentication.EventModels
     /// Reports one error observed by the poller. May be raised any number of times;
     /// <see cref="IsFatal"/> says whether the poller is about to stop.
     /// </summary>
-    public class OnPollerErrorEventArgs : EventArgs
+    public sealed class OnPollerErrorEventArgs : EventArgs
     {
         /// <summary>The error.</summary>
         public Exception Error { get; }
@@ -98,9 +65,14 @@ namespace Bayeux.Client.Extensible.Authentication.EventModels
         public ErrorSource Source { get; }
 
         /// <summary>
-        /// <c>true</c> when this error ends the polling loop and a disconnect event will follow;
-        /// <c>false</c> when the poller carries on.
+        /// <c>true</c> when this error stops the poller: <c>ConnectAsync</c> throws it, or the
+        /// polling loop ends and a disconnect event follows. <c>false</c> when the poller carries on.
         /// </summary>
+        /// <remarks>
+        /// With <see cref="PollerOptions.ReconnectOptions"/> set, a failed connect or handshake
+        /// inside the loop is not fatal: the poller may try again. Whether it did or gave up in the
+        /// end is reported by the disconnect event, never here.
+        /// </remarks>
         public bool IsFatal { get; }
 
         /// <summary>Creates the arguments.</summary>

@@ -4,8 +4,6 @@
 
 using System.Net.Http.Headers;
 using System.Text;
-using Bayeux.Client.Extensible.Authentication.EventModels;
-using Bayeux.Client.Extensible.Authentication.Models;
 
 namespace Bayeux.Client.Extensible.Authentication
 {

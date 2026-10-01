@@ -2,8 +2,6 @@
 // Licensed under the Apache License, Version 2.0.
 // See LICENSE in the repository root for full license information.
 
-using Bayeux.Client.Extensible.Authentication.EventModels;
-
 namespace Bayeux.Client.Extensible.Authentication
 {
     /// <summary>

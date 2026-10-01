@@ -7,7 +7,6 @@ using System.Net;
 using System.Text.Json;
 using Bayeux.Client.Extensible.Authentication;
 using Bayeux.Client.Extensible.Core;
-using Bayeux.Client.Extensible.Core.Models;
 
 namespace Bayeux.Client.Extensible.Samples;
 
@@ -31,7 +30,7 @@ public static class NoAuthExample
 
         await using var poller = new CometDPoller(
             http,
-            new CometdPollerOptions(channels, "cometd"),
+            new PollerOptions(channels, "cometd"),
             NoAuthProvider.Instance,
             onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
 
@@ -63,7 +62,7 @@ public static class NoAuthExample
 
         await using var poller = new CometDPoller(
             http,
-            new CometdPollerOptions(channels, "cometd"),
+            new PollerOptions(channels, "cometd"),
             NoAuthProvider.Instance,
             onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"),
             cookie: cookies);

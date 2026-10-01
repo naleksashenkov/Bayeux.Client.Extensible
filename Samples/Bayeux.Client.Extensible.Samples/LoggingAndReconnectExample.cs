@@ -6,14 +6,14 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Bayeux.Client.Extensible.Authentication;
 using Bayeux.Client.Extensible.Core;
-using Bayeux.Client.Extensible.Core.Models;
 using Microsoft.Extensions.Logging;
 
 namespace Bayeux.Client.Extensible.Samples;
 
 /// <summary>
-/// Passing a logger, observing errors, and reconnecting &#8212; which the poller never does by
-/// itself.
+/// Passing a logger, observing errors, and reconnecting by hand &#8212; the way to go when
+/// <see cref="ReconnectOptions"/> does not fit, since without it the poller never reconnects
+/// after an error. See <see cref="SalesforceReplayExample"/> for the built-in reconnection.
 /// </summary>
 public static class LoggingAndReconnectExample
 {
@@ -28,7 +28,7 @@ public static class LoggingAndReconnectExample
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels["/topic/orders"] = (e, _) => { Console.WriteLine(e.Data); return Task.CompletedTask; };
 
-        var options = new CometdPollerOptions(channels, "cometd");
+        var options = new PollerOptions(channels, "cometd");
 
         // Signals a reconnect is wanted. The handler must not reconnect inline: see below.
         using var reconnectWanted = new SemaphoreSlim(0, 1);

@@ -45,6 +45,38 @@ namespace Bayeux.Client.Extensible.Core
     /// </remarks>
     public delegate Task BayeuxEventHandler(BayeuxEvent message, CancellationToken cancellationToken);
 
+    /// <summary>Builds handlers that receive the event's data as a typed object.</summary>
+    public static class BayeuxHandler
+    {
+        /// <summary>
+        /// Wraps a handler that wants <typeparamref name="T"/> into a <see cref="BayeuxEventHandler"/>
+        /// the poller can call.
+        /// </summary>
+        /// <typeparam name="T">The type the event's data is read as.</typeparam>
+        /// <param name="handler">
+        /// Receives the data, the whole event - for its channel or <c>ext</c> - and the token.
+        /// </param>
+        /// <returns>A handler for <see cref="PollerOptions"/> or <c>SubscribeNewChannelsAsync</c>.</returns>
+        /// <remarks>
+        /// <para>
+        /// The data is read for every event, when it is delivered, with the poller's
+        /// <see cref="PollerOptions.JsonSerializerOptions"/>. Nothing in the poller changes: to it
+        /// this is an ordinary handler.
+        /// </para>
+        /// <para>
+        /// Data that does not fit <typeparamref name="T"/> throws a <see cref="JsonException"/>,
+        /// which is reported like any handler exception - through <c>OnError</c> as
+        /// <see cref="ErrorSource.Handler"/> - and the poller carries on. A <c>null</c> payload
+        /// reaches the handler as <c>null</c>.
+        /// </para>
+        /// <code>
+        /// channels["/orders/new"] = BayeuxHandler.Of&lt;Order&gt;(async (order, e, ct) =&gt; await SaveAsync(order, ct));
+        /// </code>
+        /// </remarks>
+        public static BayeuxEventHandler Of<T>(Func<T, BayeuxEvent, CancellationToken, Task> handler) =>
+        (element, ct) => handler(element.GetData<T>()!, element, ct);
+    }
+
     /// <summary>
     /// One event as a handler sees it: the channel it arrived on, its data and any extension data.
     /// </summary>
@@ -72,19 +104,42 @@ namespace Bayeux.Client.Extensible.Core
         /// </summary>
         public IReadOnlyDictionary<string, JsonElement>? Ext { get; }
 
+        // The poller's, so typed reads follow the same rules as everything it sends.
+        private readonly JsonSerializerOptions _jsonSerializerOptions;
+
+        /// <summary>Reads <see cref="Data"/> as <typeparamref name="T"/>.</summary>
+        /// <typeparam name="T">The type to read the data as.</typeparam>
+        /// <returns>The data, or <c>null</c> when the payload is JSON <c>null</c>.</returns>
+        /// <exception cref="JsonException">The data does not fit <typeparamref name="T"/>.</exception>
+        /// <remarks>
+        /// Uses the poller's <see cref="PollerOptions.JsonSerializerOptions"/> - camelCase names by
+        /// default. Reads afresh on every call; keep the result rather than calling it repeatedly.
+        /// </remarks>
+        public T? GetData<T>() => Data.Deserialize<T>(_jsonSerializerOptions);
+
         /// <summary>Creates an event.</summary>
         /// <param name="channel">The channel the event arrived on.</param>
         /// <param name="data">The event's payload.</param>
         /// <param name="ext">Extension data, or <c>null</c>.</param>
+        /// <param name="jsonSerializerOptions">
+        /// How <see cref="GetData{T}"/> reads the data, or <c>null</c> for the poller's default:
+        /// <see cref="JsonSerializerDefaults.Web"/>.
+        /// </param>
         /// <remarks>
         /// The poller creates these for real deliveries. The constructor is public so that a
-        /// handler can be unit-tested by calling it with an event built by the test.
+        /// handler can be unit-tested by calling it with an event built by the test; the options
+        /// come last and are optional so that such tests need not mention them.
         /// </remarks>
-        public BayeuxEvent(string channel, JsonElement data, IReadOnlyDictionary<string, JsonElement>? ext)
+        public BayeuxEvent(
+            string channel, 
+            JsonElement data,  
+            IReadOnlyDictionary<string, JsonElement>? ext,
+            JsonSerializerOptions? jsonSerializerOptions = null)
         {
             Channel = channel;
             Data = data;
             Ext = ext;
+            _jsonSerializerOptions = jsonSerializerOptions ?? new(JsonSerializerDefaults.Web);
         }
     }
 }

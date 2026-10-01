@@ -6,9 +6,7 @@ using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Bayeux.Client.Extensible.Authentication;
-using Bayeux.Client.Extensible.Authentication.EventModels;
 using Bayeux.Client.Extensible.Core;
-using Bayeux.Client.Extensible.Core.Models;
 
 namespace Bayeux.Client.Extensible.Samples;
 
@@ -82,7 +80,7 @@ public static class CustomAuthExample
 
         await using var poller = new CometDPoller(
             http,
-            new CometdPollerOptions(channels, "cometd"),
+            new PollerOptions(channels, "cometd"),
             auth,
             onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
 
