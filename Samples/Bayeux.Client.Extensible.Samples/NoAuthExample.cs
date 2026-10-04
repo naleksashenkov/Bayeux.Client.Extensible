@@ -12,7 +12,7 @@ namespace Bayeux.Client.Extensible.Samples;
 
 /// <summary>
 /// No authentication of its own. Covers two cases: a server that needs none, and a deployment
-/// where an application login established the session and the poller only has to carry its cookie.
+/// where an application login established the session and the client only has to carry its cookie.
 /// </summary>
 public static class NoAuthExample
 {
@@ -28,18 +28,18 @@ public static class NoAuthExample
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels["/topic/public"] = (e, _) => { Console.WriteLine(e.Data); return Task.CompletedTask; };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http,
-            new PollerOptions(channels, "cometd"),
+            new BayeuxClientOptions(channels, "cometd"),
             NoAuthProvider.Instance,
-            onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
+            onDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
         await Task.Delay(TimeSpan.FromMinutes(1));
     }
 
     /// <summary>
-    /// The session comes from an application login elsewhere. The poller adds no credentials of
+    /// The session comes from an application login elsewhere. The client adds no credentials of
     /// its own; it carries the cookie it is given, and captures anything the server sets later
     /// (CometD's <c>BAYEUX_BROWSER</c> among them).
     /// </summary>
@@ -51,7 +51,7 @@ public static class NoAuthExample
             Timeout = Timeout.InfiniteTimeSpan
         };
 
-        // Seed the container with whatever the login produced. Give each poller its own
+        // Seed the container with whatever the login produced. Give each client its own
         // container: sharing one makes CometD treat the sessions as a single browser and
         // demote all but one to interval polling.
         var cookies = new CookieContainer();
@@ -60,14 +60,14 @@ public static class NoAuthExample
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels["/v2/me/notifications"] = (e, _) => { Console.WriteLine(e.Data); return Task.CompletedTask; };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http,
-            new PollerOptions(channels, "cometd"),
+            new BayeuxClientOptions(channels, "cometd"),
             NoAuthProvider.Instance,
-            onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"),
+            onDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"),
             cookie: cookies);
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
         await Task.Delay(TimeSpan.FromMinutes(1));
     }
 }

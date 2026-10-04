@@ -10,7 +10,7 @@ namespace Bayeux.Client.Extensible.Core
     /// <remarks>
     /// <para>
     /// The channels in <see cref="Succeeded"/> are in the state the call asked for. The channels in
-    /// <see cref="Failures"/> are not, and have already been rolled back locally, so the poller's
+    /// <see cref="Failures"/> are not, and have already been rolled back locally, so the client's
     /// own view still matches the server's.
     /// </para>
     /// <para>

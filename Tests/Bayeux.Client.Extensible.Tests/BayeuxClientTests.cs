@@ -12,14 +12,14 @@ using Xunit;
 
 namespace Bayeux.Client.Extensible.Tests;
 
-public partial class CometDPollerTests
+public partial class BayeuxClientTests
 {
-    private static (PollerOptions options, ConcurrentQueue<JsonElement> received) Options(string channel)
+    private static (BayeuxClientOptions options, ConcurrentQueue<JsonElement> received) Options(string channel)
     {
         var received = new ConcurrentQueue<JsonElement>();
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels[channel] = On(data => received.Enqueue(data));
-        return (new PollerOptions(channels, "cometd"), received);
+        return (new BayeuxClientOptions(channels, "cometd"), received);
     }
 
     /// <summary>As <see cref="WithTimeoutAsync(Task, TimeSpan)"/>, returning the task's result.</summary>
@@ -75,8 +75,8 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/orders");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         var handshake = server.BodyFor("handshake");
 
@@ -85,7 +85,7 @@ public partial class CometDPollerTests
         Assert.Contains("\"supportedConnectionTypes\":[\"long-polling\"]", handshake);
         // The specification's handshake carries no clientId; the property must be omitted, not null.
         Assert.DoesNotContain("\"clientId\"", handshake);
-        // Nor any ext when no extension is registered: a poller without extensions must send exactly
+        // Nor any ext when no extension is registered: a client without extensions must send exactly
         // what it sent before the field existed. Fails if Ext is ever defaulted to an empty object.
         Assert.DoesNotContain("\"ext\"", handshake);
     }
@@ -97,8 +97,8 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/orders");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
         await WaitForAsync(() => server.RequestBodiesSnapshot.Any(b => b.StartsWith("/cometd/connect")));
 
         var subscribe = server.BodyFor("subscribe");
@@ -117,8 +117,8 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, received) = Options("/topic/orders");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.Publish("/topic/orders", new { status = "shipped" });
 
@@ -135,8 +135,8 @@ public partial class CometDPollerTests
         var (options, _) = Options("/topic/orders");
         var auth = new HttpBasicAuthProvider(new BasicAuthCredentials("svc", "p@ss"));
 
-        await using var poller = new CometDPoller(http, options, auth, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, auth, (_, _) => { });
+        await client.ConnectAsync();
 
         var headers = server.AuthHeadersSnapshot;
 
@@ -151,8 +151,8 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/orders");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         // The handshake has no cookie yet; everything after it must carry the one the server set.
         var afterHandshake = server.CookieHeadersSnapshot.Skip(1).ToList();
@@ -168,14 +168,14 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, received) = Options("/topic/alerts");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
-        var firstClientId = poller.ClientId;
+        var firstClientId = client.ClientId;
         server.FailNextConnectsWith402 = 1;
 
         Assert.True(await WaitForAsync(() => server.HandshakeCount == 2));
-        Assert.NotEqual(firstClientId, poller.ClientId);
+        Assert.NotEqual(firstClientId, client.ClientId);
         Assert.Equal(2, server.SubscriptionsSnapshot.Count(c => c == "/topic/alerts"));
 
         server.Publish("/topic/alerts", new { level = "warn" });
@@ -183,22 +183,22 @@ public partial class CometDPollerTests
     }
 
     [Fact]
-    public async Task Reconnect_none_stops_the_poller_without_sending_a_disconnect()
+    public async Task Reconnect_none_stops_the_client_without_sending_a_disconnect()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/x");
 
-        OnPollerDisconnectedEventArgs? disconnected = null;
+        BayeuxDisconnectedEventArgs? disconnected = null;
         var done = new TaskCompletionSource<bool>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance,
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance,
             (_, e) => { disconnected = e; done.TrySetResult(true); });
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         // A clean stop: a successful reply advising "none". A refusal with the same advice is a
-        // failure instead - see A_refused_connect_stops_the_poller_with_the_servers_reason.
+        // failure instead - see A_refused_connect_stops_the_client_with_the_servers_reason.
         server.StopOnNextConnect = true;
 
         await WithTimeoutAsync(done.Task, TimeSpan.FromSeconds(10));
@@ -216,14 +216,14 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/x");
 
-        OnPollerDisconnectedEventArgs? disconnected = null;
+        BayeuxDisconnectedEventArgs? disconnected = null;
         var done = new TaskCompletionSource<bool>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance,
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance,
             (_, e) => { disconnected = e; done.TrySetResult(true); });
 
-        await poller.ConnectAsync();
-        await poller.DisconnectAsync();
+        await client.ConnectAsync();
+        await client.DisconnectAsync();
         await WithTimeoutAsync(done.Task, TimeSpan.FromSeconds(10));
 
         Assert.Equal(DisconnectReason.TokenCancellation, disconnected!.Reason);
@@ -240,12 +240,12 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/y");
 
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        client.OnError += (_, e) => errors.Enqueue(e);
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
         await Task.Delay(2500);   // several poll cycles
 
         var demotions = errors.Where(e => e.Source == ErrorSource.Connect).ToList();
@@ -266,12 +266,12 @@ public partial class CometDPollerTests
 
         var (options, _) = Options("/topic/z");
         var raised = false;
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
-        poller.OnError += (_, e) => errors.Enqueue(e);
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
+        client.OnError += (_, e) => errors.Enqueue(e);
 
-        await Assert.ThrowsAnyAsync<Exception>(() => poller.ConnectAsync());
+        await Assert.ThrowsAnyAsync<Exception>(() => client.ConnectAsync());
 
         Assert.False(raised);
         Assert.Contains(errors, e => e.Source == ErrorSource.Http && e.IsFatal);
@@ -284,28 +284,28 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/denied");
 
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        client.OnError += (_, e) => errors.Enqueue(e);
 
         // Setup uses the same exception as a runtime batch, so there is one type to catch either way.
-        await Assert.ThrowsAsync<BayeuxSubscriptionException>(() => poller.ConnectAsync());
+        await Assert.ThrowsAsync<BayeuxSubscriptionException>(() => client.ConnectAsync());
         Assert.Contains(errors, e => e.Source == ErrorSource.Subscribe);
     }
 
     [Fact]
-    public async Task Poller_can_reconnect_after_a_disconnect()
+    public async Task Client_can_reconnect_after_a_disconnect()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
         var (options, received) = Options("/topic/again");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
 
-        await poller.ConnectAsync();
-        await poller.DisconnectAsync();
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
+        await client.DisconnectAsync();
+        await client.ConnectAsync();
 
         Assert.Equal(2, server.HandshakeCount);
 
@@ -316,7 +316,7 @@ public partial class CometDPollerTests
         if (!delivered)
         {
             var diag = string.Join("\n", server.RequestBodiesSnapshot);
-            Assert.Fail($"not delivered. clientId={poller.ClientId} handshakes={server.HandshakeCount} " +
+            Assert.Fail($"not delivered. clientId={client.ClientId} handshakes={server.HandshakeCount} " +
                         $"subs=[{string.Join(",", server.SubscriptionsSnapshot)}]\nrequests:\n{diag}");
         }
     }
@@ -328,12 +328,12 @@ public partial class CometDPollerTests
         using var http = server.CreateClient(TimeSpan.FromSeconds(20));   // needs 30 + 5 margin
         var (options, _) = Options("/topic/timeout");
 
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        client.OnError += (_, e) => errors.Enqueue(e);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => poller.ConnectAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.ConnectAsync());
         Assert.Contains(errors, e => e.Source == ErrorSource.Configuration);
     }
 
@@ -346,10 +346,10 @@ public partial class CometDPollerTests
 
         var extra = new ConcurrentQueue<JsonElement>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
-        await poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+        await client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
         {
             ["/topic/second"] = On(d => extra.Enqueue(d))
         });
@@ -361,22 +361,22 @@ public partial class CometDPollerTests
     }
 
     [Fact]
-    public async Task Handler_exceptions_are_reported_but_do_not_stop_the_poller()
+    public async Task Handler_exceptions_are_reported_but_do_not_stop_the_client()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels["/topic/boom"] = On(_ => throw new InvalidOperationException("handler bug"));
-        var options = new PollerOptions(channels, "cometd");
+        var options = new BayeuxClientOptions(channels, "cometd");
 
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
         var disconnected = false;
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => disconnected = true);
-        poller.OnError += (_, e) => errors.Enqueue(e);
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => disconnected = true);
+        client.OnError += (_, e) => errors.Enqueue(e);
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
         server.Publish("/topic/boom", new { x = 1 });
 
         Assert.True(await WaitForAsync(() => errors.Any(e => e.Source == ErrorSource.Handler)));
@@ -394,10 +394,10 @@ public partial class CometDPollerTests
 
         var auth = new HttpBasicAuthProvider(new BasicAuthCredentials("first", "one"));
 
-        await using var poller = new CometDPoller(http, options, auth, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, auth, (_, _) => { });
+        await client.ConnectAsync();
 
-        var clientIdBefore = poller.ClientId;
+        var clientIdBefore = client.ClientId;
 
         var expected = "Basic " + Convert.ToBase64String(
             System.Text.Encoding.GetEncoding("ISO-8859-1").GetBytes("second:two"));
@@ -406,7 +406,7 @@ public partial class CometDPollerTests
 
         // The next poll cycle must carry the new credentials, with no new handshake.
         Assert.True(await WaitForAsync(() => server.AuthHeadersSnapshot.Any(h => h == expected)));
-        Assert.Equal(clientIdBefore, poller.ClientId);   // no rehandshake
+        Assert.Equal(clientIdBefore, client.ClientId);   // no rehandshake
         Assert.Equal(1, server.HandshakeCount);
     }
 
@@ -427,8 +427,8 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, received) = Options(pattern);
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.Publish(channel, new { ok = true });
 
@@ -452,10 +452,10 @@ public partial class CometDPollerTests
         channels["/topic/**"] = On(data => broad.Enqueue(data));
         channels["/topic/orders"] = On(data => exact.Enqueue(data));
 
-        await using var poller = new CometDPoller(
-            http, new PollerOptions(channels, "cometd"), NoAuthProvider.Instance, (_, _) => { });
+        await using var client = new BayeuxClient(
+            http, new BayeuxClientOptions(channels, "cometd"), NoAuthProvider.Instance, (_, _) => { });
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
         server.Publish("/topic/orders", new { id = 1 });
 
         // CometD delivers to every matching subscription, so both handlers fire once.
@@ -469,13 +469,13 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, received) = Options("/topic/gone");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
-        await poller.UnsubscribeChannelsAsync(["/topic/gone"]);
+        await client.UnsubscribeChannelsAsync(["/topic/gone"]);
 
         Assert.Contains("/topic/gone", server.UnsubscriptionsSnapshot);
-        Assert.DoesNotContain("/topic/gone", poller.Channels.Keys);
+        Assert.DoesNotContain("/topic/gone", client.Channels.Keys);
 
         // The real point: the set replayed after a rehandshake no longer contains it.
         server.FailNextConnectsWith402 = 1;
@@ -494,16 +494,16 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/present");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         // Nothing to unsubscribe means nothing to ask the server, so the caller is told rather than
         // left believing a channel was dropped.
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => poller.UnsubscribeChannelsAsync(["/topic/never-registered"]));
+            () => client.UnsubscribeChannelsAsync(["/topic/never-registered"]));
 
         Assert.Empty(server.UnsubscriptionsSnapshot);
-        Assert.Contains("/topic/present", poller.Channels.Keys);
+        Assert.Contains("/topic/present", client.Channels.Keys);
     }
 
     [Fact]
@@ -512,9 +512,9 @@ public partial class CometDPollerTests
         var source = new ConcurrentDictionary<string, BayeuxEventHandler>();
         source["/topic/one"] = Ignore;
 
-        var options = new PollerOptions(source, "cometd");
+        var options = new BayeuxClientOptions(source, "cometd");
 
-        // The caller still holds their own dictionary; mutating it must not reach the poller,
+        // The caller still holds their own dictionary; mutating it must not reach the client,
         // because an entry added that way would never be subscribed on the server.
         source["/topic/sneaked-in"] = Ignore;
 
@@ -523,18 +523,18 @@ public partial class CometDPollerTests
     }
 
     [Fact]
-    public async Task Pollers_built_from_one_options_object_keep_their_own_subscriptions()
+    public async Task Clients_built_from_one_options_object_keep_their_own_subscriptions()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/shared");
 
-        // One options object for two pollers, as a DI container shares a singleton. When the
-        // live list lived in the options, a subscribe on one poller appeared in the other, which
+        // One options object for two clients, as a DI container shares a singleton. When the
+        // live list lived in the options, a subscribe on one client appeared in the other, which
         // then subscribed to it at its next handshake - and an unsubscribe left the other
         // receiving events it had no handler for.
-        await using var first = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await using var second = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await using var first = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await using var second = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
         await first.ConnectAsync();
 
         await first.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler> { ["/topic/only-first"] = Ignore });
@@ -554,19 +554,19 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/first");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
-        await poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+        await client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
         {
             ["/topic/second"] = Ignore
         });
 
-        Assert.Contains("/topic/second", poller.Channels.Keys);
+        Assert.Contains("/topic/second", client.Channels.Keys);
 
-        await poller.UnsubscribeChannelsAsync(["/topic/second"]);
+        await client.UnsubscribeChannelsAsync(["/topic/second"]);
 
-        Assert.DoesNotContain("/topic/second", poller.Channels.Keys);
+        Assert.DoesNotContain("/topic/second", client.Channels.Keys);
     }
 
     [Fact]
@@ -576,10 +576,10 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/first");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
-        await poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+        await client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
         {
             ["/topic/second"] = Ignore,
             ["/topic/third"] = Ignore
@@ -603,10 +603,10 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/first");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
-        await poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+        await client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
         {
             ["/topic/first"] = Ignore,
             ["/topic/second"] = Ignore
@@ -623,18 +623,18 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/first");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.RejectSubscribeFor("/topic/denied");
 
         await Assert.ThrowsAsync<BayeuxSubscriptionException>(
-            () => poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+            () => client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
             {
                 ["/topic/denied"] = Ignore
             }));
 
-        Assert.DoesNotContain("/topic/denied", poller.Channels.Keys);
+        Assert.DoesNotContain("/topic/denied", client.Channels.Keys);
     }
 
     [Fact]
@@ -646,13 +646,13 @@ public partial class CometDPollerTests
 
         var accepted = new ConcurrentQueue<JsonElement>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.RejectSubscribeFor("/topic/denied");
 
         var error = await Assert.ThrowsAsync<BayeuxSubscriptionException>(
-            () => poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+            () => client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
             {
                 ["/topic/allowed"] = On(d => accepted.Enqueue(d)),
                 ["/topic/denied"] = Ignore
@@ -662,8 +662,8 @@ public partial class CometDPollerTests
         Assert.Contains("/topic/denied", error.Failures.Keys);
 
         // The local view must match what the server actually did, in both directions.
-        Assert.Contains("/topic/allowed", poller.Channels.Keys);
-        Assert.DoesNotContain("/topic/denied", poller.Channels.Keys);
+        Assert.Contains("/topic/allowed", client.Channels.Keys);
+        Assert.DoesNotContain("/topic/denied", client.Channels.Keys);
 
         // And the accepted channel really is live.
         server.Publish("/topic/allowed", new { ok = true });
@@ -677,22 +677,22 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/first");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.NextSubscribeHttpStatus = 500;
 
         // Not a BayeuxSubscriptionException: nothing is known about what the server did, and the
         // absence of that type is what tells the caller the batch was not partly applied.
         await Assert.ThrowsAnyAsync<Exception>(
-            () => poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+            () => client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
             {
                 ["/topic/a"] = Ignore,
                 ["/topic/b"] = Ignore
             }));
 
-        Assert.DoesNotContain("/topic/a", poller.Channels.Keys);
-        Assert.DoesNotContain("/topic/b", poller.Channels.Keys);
+        Assert.DoesNotContain("/topic/a", client.Channels.Keys);
+        Assert.DoesNotContain("/topic/b", client.Channels.Keys);
     }
 
     [Fact]
@@ -706,21 +706,21 @@ public partial class CometDPollerTests
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels["/topic/stuck"] = On(d => kept.Enqueue(d));
         channels["/topic/free"] = Ignore;
-        var options = new PollerOptions(channels, "cometd");
+        var options = new BayeuxClientOptions(channels, "cometd");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.RejectUnsubscribeFor("/topic/stuck");
 
         var error = await Assert.ThrowsAsync<BayeuxSubscriptionException>(
-            () => poller.UnsubscribeChannelsAsync(["/topic/stuck", "/topic/free"]));
+            () => client.UnsubscribeChannelsAsync(["/topic/stuck", "/topic/free"]));
 
         Assert.Equal(["/topic/free"], error.Succeeded);
         Assert.Contains("/topic/stuck", error.Failures.Keys);
 
-        Assert.Contains("/topic/stuck", poller.Channels.Keys);
-        Assert.DoesNotContain("/topic/free", poller.Channels.Keys);
+        Assert.Contains("/topic/stuck", client.Channels.Keys);
+        Assert.DoesNotContain("/topic/free", client.Channels.Keys);
 
         // The restored handler must still run: the server never dropped that subscription.
         server.Publish("/topic/stuck", new { still = "coming" });
@@ -736,19 +736,19 @@ public partial class CometDPollerTests
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels["/topic/a"] = Ignore;
         channels["/topic/b"] = Ignore;
-        var options = new PollerOptions(channels, "cometd");
+        var options = new BayeuxClientOptions(channels, "cometd");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.NextUnsubscribeHttpStatus = 500;
 
         await Assert.ThrowsAnyAsync<Exception>(
-            () => poller.UnsubscribeChannelsAsync(["/topic/a", "/topic/b"]));
+            () => client.UnsubscribeChannelsAsync(["/topic/a", "/topic/b"]));
 
         // Both are still subscribed on the server, so both handlers must survive the failure.
-        Assert.Contains("/topic/a", poller.Channels.Keys);
-        Assert.Contains("/topic/b", poller.Channels.Keys);
+        Assert.Contains("/topic/a", client.Channels.Keys);
+        Assert.Contains("/topic/b", client.Channels.Keys);
     }
 
     [Fact]
@@ -758,15 +758,15 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, received) = Options("/topic/first");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         // CometD flushes the session queue onto whatever request arrives first, so an event can ride
         // in front of a /meta/subscribe reply. Verified against the reference server: only
         // /meta/handshake refuses to carry the queue.
         server.PiggybackOnNextSubscribe = ("/topic/first", new { text = "queued-event" });
 
-        await poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+        await client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
         {
             ["/topic/second"] = Ignore
         });
@@ -784,7 +784,7 @@ public partial class CometDPollerTests
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
-        CometDPoller? poller = null;
+        BayeuxClient? client = null;
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
 
         // A handler awaiting a subscribe it starts itself, while its event rode on a subscribe reply
@@ -792,22 +792,22 @@ public partial class CometDPollerTests
         // makes no difference - used to wait for a lock its own caller held. Deferred dispatch
         // delivers the event only after the lock is released.
         channels["/topic/trigger"] = async (_, _) =>
-            await poller!.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+            await client!.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
             {
                 ["/topic/from-handler"] = Ignore
             });
 
-        await using var created = new CometDPoller(
-            http, new PollerOptions(channels, "cometd"), NoAuthProvider.Instance, (_, _) => { });
-        poller = created;
-        await poller.ConnectAsync();
+        await using var created = new BayeuxClient(
+            http, new BayeuxClientOptions(channels, "cometd"), NoAuthProvider.Instance, (_, _) => { });
+        client = created;
+        await client.ConnectAsync();
 
         server.PiggybackOnNextSubscribe = ("/topic/trigger", new { go = true });
 
         // The timeout is what makes this a test: without it a regression does not fail, it hangs
         // the whole run - CI included - with nothing to say which test is stuck.
         await WithTimeoutAsync(
-            poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+            client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
             {
                 ["/topic/outer"] = Ignore
             }),
@@ -831,12 +831,12 @@ public partial class CometDPollerTests
             throw new InvalidOperationException("handler bug");
         });
 
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(
-            http, new PollerOptions(channels, "cometd"), NoAuthProvider.Instance, (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(
+            http, new BayeuxClientOptions(channels, "cometd"), NoAuthProvider.Instance, (_, _) => { });
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         server.RejectSubscribeFor("/topic/denied");
         server.PiggybackOnNextSubscribe = ("/topic/first", new { late = true });
@@ -845,7 +845,7 @@ public partial class CometDPollerTests
         // out. A handler exception escaping there would replace the BayeuxSubscriptionException the
         // caller is owed, and the caller would believe the request itself had failed.
         await Assert.ThrowsAsync<BayeuxSubscriptionException>(
-            () => poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+            () => client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
             {
                 ["/topic/denied"] = Ignore
             }));
@@ -862,17 +862,17 @@ public partial class CometDPollerTests
     /// </remarks>
     private sealed class TestExtension : IBayeuxExtension
     {
-        public Func<BaseLongPollingRequestModel, CancellationToken, Task>? OnOutgoing { get; set; }
+        public Func<BayeuxRequestModel, CancellationToken, Task>? OnOutgoing { get; set; }
         public Action<BayeuxResponseMessageModel>? OnIncoming { get; set; }
 
-        public Task OutgoingAsync(BaseLongPollingRequestModel requestModel, CancellationToken cancellationToken) =>
+        public Task OutgoingAsync(BayeuxRequestModel requestModel, CancellationToken cancellationToken) =>
             OnOutgoing?.Invoke(requestModel, cancellationToken) ?? Task.CompletedTask;
 
         public void Incoming(BayeuxResponseMessageModel responseModel) =>
             OnIncoming?.Invoke(responseModel);
     }
 
-    private static PollerOptions OptionsWith(
+    private static BayeuxClientOptions OptionsWith(
         IBayeuxExtension extension, string channel, BayeuxEventHandler? handler = null) =>
         new(
             new Dictionary<string, BayeuxEventHandler> { [channel] = handler ?? Ignore },
@@ -896,9 +896,9 @@ public partial class CometDPollerTests
             }
         };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsWith(extension, "/topic/a"), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         // Written before serialisation, so it is in the body that went over the wire.
         Assert.Contains("\"ext\":{\"probe\":\"out\"}", server.BodyFor("handshake"));
@@ -933,9 +933,9 @@ public partial class CometDPollerTests
             }
         };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsWith(extension, "/topic/a"), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         Assert.Contains("\"ext\":{\"probe\":\"agreed\"}", server.BodyFor("subscribe"));
     }
@@ -957,12 +957,12 @@ public partial class CometDPollerTests
             }
         };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http,
             OptionsWith(extension, "/topic/a", On(_ => order.Enqueue("handler"))),
             NoAuthProvider.Instance,
             (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         server.Publish("/topic/a", new { n = 1 });
 
@@ -978,7 +978,7 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
 
         var delivered = new ConcurrentQueue<JsonElement>();
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
         var extension = new TestExtension
         {
@@ -989,13 +989,13 @@ public partial class CometDPollerTests
             }
         };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http,
             OptionsWith(extension, "/topic/a", On(data => delivered.Enqueue(data))),
             NoAuthProvider.Instance,
             (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         server.Publish("/topic/a", new { n = 1 });
 
@@ -1010,7 +1010,7 @@ public partial class CometDPollerTests
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
         var extension = new TestExtension
         {
@@ -1019,13 +1019,13 @@ public partial class CometDPollerTests
                 : Task.CompletedTask
         };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsWith(extension, "/topic/a"), NoAuthProvider.Instance, (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
+        client.OnError += (_, e) => errors.Enqueue(e);
 
         // A message the extension could not prepare must not go out: without the token it failed to
         // obtain, the server would reject it anyway - or, worse, accept it without the extension.
-        await Assert.ThrowsAnyAsync<Exception>(() => poller.ConnectAsync());
+        await Assert.ThrowsAnyAsync<Exception>(() => client.ConnectAsync());
         Assert.Equal(0, server.HandshakeCount);
 
         // Once, and as what it is. A call placed inside the transport's try block would also be
@@ -1048,12 +1048,12 @@ public partial class CometDPollerTests
         var received = new ConcurrentQueue<JsonElement>();
         var replay = new SalesforceReplayExtension();
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http,
             OptionsWith(replay, "/event/Low_Ink__e", On(data => received.Enqueue(data))),
             NoAuthProvider.Instance,
             (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         // Nothing seen yet: resume from -1, only new events.
         Assert.True(replay.IsSupported);
@@ -1063,7 +1063,7 @@ public partial class CometDPollerTests
         server.Publish("/event/Low_Ink__e", new { payload = new { ink = 0.2 }, @event = new { replayId = 2113 } });
         Assert.True(await WaitForAsync(() => received.Count == 1));
 
-        // The session is lost; the poller re-handshakes and re-subscribes on its own.
+        // The session is lost; the client re-handshakes and re-subscribes on its own.
         server.FailNextConnectsWith402 = 1;
         Assert.True(await WaitForAsync(() => server.HandshakeCount == 2
             && server.SubscriptionsSnapshot.Count(c => c == "/event/Low_Ink__e") == 2));
@@ -1082,9 +1082,9 @@ public partial class CometDPollerTests
         // No ext in the handshake reply: the server never said yes.
         var replay = new SalesforceReplayExtension();
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsWith(replay, "/event/Low_Ink__e"), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         // Asked in the handshake, but without agreement nothing more is sent.
         Assert.Contains("\"ext\":{\"replay\":true}", server.BodyFor("handshake"));
@@ -1092,7 +1092,7 @@ public partial class CometDPollerTests
         Assert.DoesNotContain("\"ext\"", LastSubscribeBody(server));
     }
 
-    private static PollerOptions OptionsFor(string channel, BayeuxEventHandler handler) =>
+    private static BayeuxClientOptions OptionsFor(string channel, BayeuxEventHandler handler) =>
         new(new Dictionary<string, BayeuxEventHandler> { [channel] = handler }, "cometd");
 
     [Fact]
@@ -1104,7 +1104,7 @@ public partial class CometDPollerTests
         var release = new TaskCompletionSource<bool>();
         var seen = new ConcurrentQueue<int>();
 
-        await using var poller = new CometDPoller(http, OptionsFor("/topic/a", async (e, _) =>
+        await using var client = new BayeuxClient(http, OptionsFor("/topic/a", async (e, _) =>
         {
             var n = e.Data.GetProperty("n").GetInt32();
             seen.Enqueue(n);
@@ -1112,7 +1112,7 @@ public partial class CometDPollerTests
             if (n == 1)
                 await release.Task;
         }), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         server.Publish("/topic/a", new { n = 1 });
         Assert.True(await WaitForAsync(() => seen.Count == 1));
@@ -1129,24 +1129,24 @@ public partial class CometDPollerTests
     }
 
     [Fact]
-    public async Task An_exception_after_an_await_is_reported_and_the_poller_keeps_running()
+    public async Task An_exception_after_an_await_is_reported_and_the_client_keeps_running()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
         var calls = 0;
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
         // With the old EventHandler signature this lambda was async void: the exception after the
         // await escaped every try block and took the process down.
-        await using var poller = new CometDPoller(http, OptionsFor("/topic/a", async (_, _) =>
+        await using var client = new BayeuxClient(http, OptionsFor("/topic/a", async (_, _) =>
         {
             Interlocked.Increment(ref calls);
             await Task.Yield();
             throw new InvalidOperationException("handler bug");
         }), NoAuthProvider.Instance, (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         server.Publish("/topic/a", new { n = 1 });
         Assert.True(await WaitForAsync(() => errors.Any(e => e.Source == ErrorSource.Handler && !e.IsFatal)));
@@ -1163,12 +1163,12 @@ public partial class CometDPollerTests
 
         var channels = new ConcurrentQueue<string>();
 
-        await using var poller = new CometDPoller(http, OptionsFor("/topic/**", (e, _) =>
+        await using var client = new BayeuxClient(http, OptionsFor("/topic/**", (e, _) =>
         {
             channels.Enqueue(e.Channel);
             return Task.CompletedTask;
         }), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         server.Publish("/topic/orders/17", new { n = 1 });
         server.Publish("/topic/alerts", new { n = 2 });
@@ -1185,21 +1185,21 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
 
         var started = new TaskCompletionSource<bool>();
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, OptionsFor("/topic/a", async (_, token) =>
+        await using var client = new BayeuxClient(http, OptionsFor("/topic/a", async (_, token) =>
         {
             started.TrySetResult(true);
             await Task.Delay(Timeout.Infinite, token);
         }), NoAuthProvider.Instance, (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         server.Publish("/topic/a", new { n = 1 });
         await WithTimeoutAsync(started.Task, TimeSpan.FromSeconds(10));
 
         // DisconnectAsync waits for the handler, so a handler that ignored the token would hang it.
-        await WithTimeoutAsync(poller.DisconnectAsync(), TimeSpan.FromSeconds(10));
+        await WithTimeoutAsync(client.DisconnectAsync(), TimeSpan.FromSeconds(10));
 
         // A handler stopping because it was told to is not a failure.
         Assert.DoesNotContain(errors, e => e.Source == ErrorSource.Handler);
@@ -1211,21 +1211,21 @@ public partial class CometDPollerTests
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
-        CometDPoller? poller = null;
+        BayeuxClient? client = null;
         var returned = new TaskCompletionSource<bool>();
         var stopped = new TaskCompletionSource<bool>();
 
         // Disposed with Dispose, not DisposeAsync: if this regresses, the loop is deadlocked, and
         // DisposeAsync - which waits for the loop - would hang the run instead of failing the test.
-        using var created = new CometDPoller(http, OptionsFor("/control/stop", async (_, _) =>
+        using var created = new BayeuxClient(http, OptionsFor("/control/stop", async (_, _) =>
         {
             // The loop is waiting for this handler, and DisconnectAsync normally waits for the loop.
             // From inside a handler it only signals, and the loop stops once the handler returns.
-            await poller!.DisconnectAsync();
+            await client!.DisconnectAsync();
             returned.TrySetResult(true);
         }), NoAuthProvider.Instance, (_, _) => stopped.TrySetResult(true));
-        poller = created;
-        await poller.ConnectAsync();
+        client = created;
+        await client.ConnectAsync();
 
         server.Publish("/control/stop", new { n = 1 });
 
@@ -1234,29 +1234,29 @@ public partial class CometDPollerTests
     }
 
     [Fact]
-    public async Task A_handler_cannot_restart_the_poller_and_is_told_where_to_do_it()
+    public async Task A_handler_cannot_restart_the_client_and_is_told_where_to_do_it()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
-        CometDPoller? poller = null;
+        BayeuxClient? client = null;
         var refused = new TaskCompletionSource<Exception>();
 
         // Disposed with Dispose, not DisposeAsync: if this regresses, the loop is deadlocked, and
         // DisposeAsync - which waits for the loop - would hang the run instead of failing the test.
-        using var created = new CometDPoller(http, OptionsFor("/control/restart", async (_, _) =>
+        using var created = new BayeuxClient(http, OptionsFor("/control/restart", async (_, _) =>
         {
             try
             {
-                await poller!.ConnectAsync();
+                await client!.ConnectAsync();
             }
             catch (Exception ex)
             {
                 refused.TrySetResult(ex);
             }
         }), NoAuthProvider.Instance, (_, _) => { });
-        poller = created;
-        await poller.ConnectAsync();
+        client = created;
+        await client.ConnectAsync();
 
         server.Publish("/control/restart", new { n = 1 });
 
@@ -1264,21 +1264,21 @@ public partial class CometDPollerTests
         // handler. The message names the way that does work.
         var error = await WithTimeoutAsync(refused.Task, TimeSpan.FromSeconds(10));
         Assert.IsType<InvalidOperationException>(error);
-        Assert.Contains("OnPollerDisconnected", error.Message);
+        Assert.Contains("OnDisconnected", error.Message);
     }
 
     [Fact]
-    public async Task OnPollerDisconnected_may_reconnect_after_handlers_have_run()
+    public async Task OnDisconnected_may_reconnect_after_handlers_have_run()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
-        CometDPoller? poller = null;
+        BayeuxClient? client = null;
         var reconnected = new TaskCompletionSource<Exception?>();
         var first = true;
         var received = new ConcurrentQueue<JsonElement>();
 
-        await using var created = new CometDPoller(
+        await using var created = new BayeuxClient(
             http,
             OptionsFor("/topic/a", On(data => received.Enqueue(data))),
             NoAuthProvider.Instance,
@@ -1291,7 +1291,7 @@ public partial class CometDPollerTests
 
                 try
                 {
-                    await poller!.ConnectAsync();
+                    await client!.ConnectAsync();
                     reconnected.TrySetResult(null);
                 }
                 catch (Exception ex)
@@ -1299,8 +1299,8 @@ public partial class CometDPollerTests
                     reconnected.TrySetResult(ex);
                 }
             });
-        poller = created;
-        await poller.ConnectAsync();
+        client = created;
+        await client.ConnectAsync();
 
         // A handler has run, so a "call came from a handler" flag that leaked out of the dispatch
         // would now wrongly refuse the documented way to reconnect.
@@ -1318,7 +1318,7 @@ public partial class CometDPollerTests
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
         var sawKey = new ConcurrentQueue<bool>();
 
         // Two overlapping subscriptions, so one event reaches two handlers through the same
@@ -1345,10 +1345,10 @@ public partial class CometDPollerTests
             ["/topic/orders"] = recordThenStrip
         };
 
-        await using var poller = new CometDPoller(
-            http, new PollerOptions(channels, "cometd"), NoAuthProvider.Instance, (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(
+            http, new BayeuxClientOptions(channels, "cometd"), NoAuthProvider.Instance, (_, _) => { });
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         server.Publish("/topic/orders", new { n = 1 }, extJson: """{"probe":true}""");
 
@@ -1370,16 +1370,16 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
 
         var received = new ConcurrentQueue<JsonElement>();
-        var disconnects = new ConcurrentQueue<OnPollerDisconnectedEventArgs>();
+        var disconnects = new ConcurrentQueue<BayeuxDisconnectedEventArgs>();
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsFor("/topic/a", On(data => received.Enqueue(data))), NoAuthProvider.Instance,
             (_, e) => disconnects.Enqueue(e));
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         // ConnectAsync stops the running session first. The token it waits with must not be the
         // session's own - stopping the session would cancel it and fail the call nobody cancelled.
-        await WithTimeoutAsync(poller.ConnectAsync(), TimeSpan.FromSeconds(10));
+        await WithTimeoutAsync(client.ConnectAsync(), TimeSpan.FromSeconds(10));
 
         Assert.Equal(2, server.HandshakeCount);
         Assert.Equal(DisconnectReason.TokenCancellation, Assert.Single(disconnects).Reason);
@@ -1389,26 +1389,26 @@ public partial class CometDPollerTests
     }
 
     [Fact]
-    public async Task Connecting_with_a_cancelled_token_sends_nothing_and_leaves_the_poller_usable()
+    public async Task Connecting_with_a_cancelled_token_sends_nothing_and_leaves_the_client_usable()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
         var received = new ConcurrentQueue<JsonElement>();
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsFor("/topic/a", On(data => received.Enqueue(data))), NoAuthProvider.Instance, (_, _) => { });
 
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
 
         // Thrown, not returned: a connect that "succeeds" without starting the loop leaves a
-        // session on the server and a poller that never delivers anything.
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poller.ConnectAsync(cancelled.Token));
+        // session on the server and a client that never delivers anything.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.ConnectAsync(cancelled.Token));
         Assert.Equal(0, server.HandshakeCount);
-        Assert.Equal(string.Empty, poller.ClientId);
+        Assert.Equal(string.Empty, client.ClientId);
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
         server.Publish("/topic/a", new { n = 1 });
         Assert.True(await WaitForAsync(() => received.Count == 1));
     }
@@ -1422,14 +1422,14 @@ public partial class CometDPollerTests
         var received = new ConcurrentQueue<JsonElement>();
         var stopped = false;
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsFor("/topic/a", On(data => received.Enqueue(data))), NoAuthProvider.Instance,
             (_, _) => stopped = true);
 
         // "Give up if connecting takes too long" - and then, typically, disposed with the using.
         using (var connectTimeout = new CancellationTokenSource())
         {
-            await poller.ConnectAsync(connectTimeout.Token);
+            await client.ConnectAsync(connectTimeout.Token);
             connectTimeout.Cancel();
         }
 
@@ -1446,18 +1446,18 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/a");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poller.SubscribeNewChannelsAsync(
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.SubscribeNewChannelsAsync(
             new Dictionary<string, BayeuxEventHandler> { ["/topic/b"] = Ignore }, cancelled.Token));
 
         // Neither side changed: not sent, and not registered locally.
         Assert.DoesNotContain("/topic/b", server.SubscriptionsSnapshot);
-        Assert.DoesNotContain("/topic/b", poller.Channels.Keys);
+        Assert.DoesNotContain("/topic/b", client.Channels.Keys);
     }
 
     [Fact]
@@ -1467,17 +1467,17 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, received) = Options("/topic/a");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => poller.UnsubscribeChannelsAsync(["/topic/a"], cancelled.Token));
+            () => client.UnsubscribeChannelsAsync(["/topic/a"], cancelled.Token));
 
         Assert.Empty(server.UnsubscriptionsSnapshot);
-        Assert.Contains("/topic/a", poller.Channels.Keys);
+        Assert.Contains("/topic/a", client.Channels.Keys);
 
         // Still subscribed on the server, so the handler must still be there to receive.
         server.Publish("/topic/a", new { n = 1 });
@@ -1492,23 +1492,23 @@ public partial class CometDPollerTests
 
         var started = new TaskCompletionSource<bool>();
         var release = new TaskCompletionSource<bool>();
-        var stopped = new TaskCompletionSource<OnPollerDisconnectedEventArgs>();
+        var stopped = new TaskCompletionSource<BayeuxDisconnectedEventArgs>();
 
         // Disposed with Dispose, not DisposeAsync: if the stop regressed, the loop would never end
         // and DisposeAsync would hang the run instead of failing the test.
-        using var poller = new CometDPoller(http, OptionsFor("/topic/a", async (_, _) =>
+        using var client = new BayeuxClient(http, OptionsFor("/topic/a", async (_, _) =>
         {
             started.TrySetResult(true);
             await release.Task;                     // ignores its token on purpose
         }), NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         server.Publish("/topic/a", new { n = 1 });
         await WithTimeoutAsync(started.Task, TimeSpan.FromSeconds(10));
 
         // The caller is not willing to wait for a handler that will not stop: the wait gives up...
         using (var patience = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poller.DisconnectAsync(patience.Token));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.DisconnectAsync(patience.Token));
 
         // ...but the stop was already decided, and happens as soon as the handler lets it.
         Assert.False(stopped.Task.IsCompleted);
@@ -1526,8 +1526,8 @@ public partial class CometDPollerTests
 
         var armed = false;
         var waiting = new TaskCompletionSource<bool>();
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
-        var stopped = new TaskCompletionSource<OnPollerDisconnectedEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
+        var stopped = new TaskCompletionSource<BayeuxDisconnectedEventArgs>();
 
         // Does what an extension should: passes the token on to what it awaits.
         var extension = new TestExtension
@@ -1542,16 +1542,16 @@ public partial class CometDPollerTests
             }
         };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsWith(extension, "/topic/a"), NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         armed = true;
         server.Publish("/topic/a", new { n = 1 });            // ends the held poll; the next goes through the extension
         await WithTimeoutAsync(waiting.Task, TimeSpan.FromSeconds(10));
 
-        await WithTimeoutAsync(poller.DisconnectAsync(), TimeSpan.FromSeconds(10));
+        await WithTimeoutAsync(client.DisconnectAsync(), TimeSpan.FromSeconds(10));
 
         // The extension stopped because it was told to. Reporting that as a fatal extension failure
         // would raise a false alarm on every ordinary shutdown that caught an extension mid-I/O.

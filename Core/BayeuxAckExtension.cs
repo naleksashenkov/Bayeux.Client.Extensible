@@ -14,12 +14,12 @@ namespace Bayeux.Client.Extensible.Core
     /// <para>
     /// The server numbers each <c>/meta/connect</c> reply that carries events - a batch - and the
     /// next connect tells it the last batch received. Until then the events stay queued. A reply
-    /// lost to a network failure is therefore not lost: with a reconnect policy the poller retries
+    /// lost to a network failure is therefore not lost: with a reconnect policy the client retries
     /// <c>/meta/connect</c> in the same session, still confirming the earlier batch, and the server
     /// sends the rest again.
     /// </para>
     /// <para>
-    /// <b>Acknowledged means handled.</b> The poller sends the next connect only after every handler
+    /// <b>Acknowledged means handled.</b> The client sends the next connect only after every handler
     /// for the previous events has returned, so the server discards nothing a handler has not
     /// finished with.
     /// </para>
@@ -52,7 +52,7 @@ namespace Bayeux.Client.Extensible.Core
         /// Asks for acknowledgements in every handshake, and confirms the last batch in every
         /// connect once the server has agreed. A connect to a server that has not agreed is left as is.
         /// </remarks>
-        public Task OutgoingAsync(BaseLongPollingRequestModel requestModel, CancellationToken cancellationToken)
+        public Task OutgoingAsync(BayeuxRequestModel requestModel, CancellationToken cancellationToken)
         {
             if (requestModel is HandshakeRequestModel)
             {
@@ -80,7 +80,7 @@ namespace Bayeux.Client.Extensible.Core
             if (responseModel.Ext is null || !responseModel.Ext.TryGetValue("ack", out var ack))
                 return;
             
-            if (responseModel.Channel == CometDConstants.MetaChannels.Handshake)
+            if (responseModel.Channel == BayeuxConstants.MetaChannels.Handshake)
             {
                 switch (ack.ValueKind)
                 {
@@ -98,7 +98,7 @@ namespace Bayeux.Client.Extensible.Core
                 }
             }
             // Only a successful reply numbers a batch; a failed one carries no events to confirm.
-            else if (responseModel.Channel == CometDConstants.MetaChannels.Connect &&
+            else if (responseModel.Channel == BayeuxConstants.MetaChannels.Connect &&
                 responseModel.IsSuccessful == true &&
                 _serverSupportsAck &&
                 ack.TryGetInt64(out var batchValue))
@@ -107,7 +107,7 @@ namespace Bayeux.Client.Extensible.Core
 
         // The message's ext, created when this is the first extension to write to it. Never
         // replaced: another extension may already have put its own keys there.
-        private static Dictionary<string, object> Ext(BaseLongPollingRequestModel requestModel) =>
+        private static Dictionary<string, object> Ext(BayeuxRequestModel requestModel) =>
             requestModel.Ext ??= new Dictionary<string, object>();
     }
 }

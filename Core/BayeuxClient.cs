@@ -6,7 +6,7 @@ using Bayeux.Client.Extensible.Authentication;
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using static Bayeux.Client.Extensible.Core.CometDConstants;
+using static Bayeux.Client.Extensible.Core.BayeuxConstants;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
@@ -15,34 +15,32 @@ using System.Collections.ObjectModel;
 namespace Bayeux.Client.Extensible.Core
 {
     /// <summary>
-    /// A Bayeux long-polling client. One instance owns exactly one CometD session.
+    /// A Bayeux client. One instance owns exactly one Bayeux session.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// See <see cref="IBayeuxPoller"/> for the behavioural contract: background operation, no
+    /// See <see cref="IBayeuxClient"/> for the behavioural contract: background operation, no
     /// automatic retry, single-threaded lifecycle.
     /// </para>
     /// <para>
-    /// The poller manages session cookies itself, per request, so that several pollers can share
-    /// one <see cref="HttpClient"/> without their sessions colliding. The client's handler must
+    /// The client manages session cookies itself, per request, so that several Bayeux clients can
+    /// share one <see cref="HttpClient"/> without their sessions colliding. The HttpClient's handler must
     /// therefore have <c>UseCookies = false</c>; otherwise both layers manage cookies and sessions
     /// on the same host overwrite one another.
     /// </para>
     /// </remarks>
-    public sealed class CometDPoller : IBayeuxPoller
+    public sealed class BayeuxClient : IBayeuxClient
     {
         private CancellationTokenSource _bayeuxCts = new CancellationTokenSource();
 
         private CancellationToken _token;
 
-        // Jitter for reconnect delays. Drawn from only by the polling loop, and there is one loop at
-        // a time, so the instance is never shared between threads. Kept per poller rather than in
-        // ReconnectOptions, because one options object may serve several pollers.
+        // Jitter for reconnect delays. Drawn from only by the connect loop, and there is one loop at
+        // a time, so the instance is never shared between threads. Kept per client rather than in
+        // ReconnectOptions, because one options object may serve several clients.
         private readonly Random _random = new Random();
 
-        private readonly CookieContainer _cookieContainer = new CookieContainer();
-
-        private readonly ILogger<CometDPoller> _logger;
+        private readonly ILogger<BayeuxClient> _logger;
 
         private readonly SemaphoreSlim _channelLock = new(1, 1);
 
@@ -57,8 +55,8 @@ namespace Bayeux.Client.Extensible.Core
         private readonly AsyncLocal<bool> _insideDispatch = new();
 
         // The live subscriptions: what is resubscribed after a handshake and what events are
-        // dispatched to. Copied from the options at construction and owned by this poller alone,
-        // so pollers sharing one options object - as a DI container shares a singleton - never
+        // dispatched to. Copied from the options at construction and owned by this client alone,
+        // so clients sharing one options object - as a DI container shares a singleton - never
         // see each other's subscribe and unsubscribe. Written only under _channelLock; read by
         // dispatch without it, which a ConcurrentDictionary allows.
         private readonly ConcurrentDictionary<string, BayeuxEventHandler> _channels;
@@ -67,33 +65,38 @@ namespace Bayeux.Client.Extensible.Core
 
         private long _cometdMessageId = 0;
 
-        private readonly HttpClient _client;
+        // BayeuxClientState as an int, because Interlocked works on ints. Changed by whichever thread makes
+        // the transition - the caller's in ConnectAsync, the loop's afterwards - and only through
+        // ChangeState.
+        private int _stateCode = (int)BayeuxClientState.Disconnected;
+
+        private readonly IBayeuxTransport _transport;
 
         private bool _isMultipleClientsWarningShown;
 
         private volatile bool _isDestroyed = false;
 
-        // True for the whole run of the polling loop. Tells a failure inside the loop, which a
+        // True for the whole run of the connect loop. Tells a failure inside the loop, which a
         // reconnect policy may retry, from one in ConnectAsync, which is never retried. The two do
         // not overlap: ConnectAsync waits for the previous loop before it sets anything up.
         private volatile bool _isLoopRunning;
 
         /// <summary>
-        /// Whether a failed connect or handshake stops the poller, which is what
-        /// <see cref="OnPollerErrorEventArgs.IsFatal"/> reports: always during
+        /// Whether a failed connect or handshake stops the client, which is what
+        /// <see cref="BayeuxErrorEventArgs.IsFatal"/> reports: always during
         /// <see cref="ConnectAsync"/>, which never retries; inside the loop only when there is no
         /// reconnect policy.
         /// </summary>
-        private bool FailureEndsPoller => !_isLoopRunning || Options.ReconnectOptions is null;
+        private bool FailureEndsConnection => !_isLoopRunning || Options.ReconnectOptions is null;
 
-        /// <summary>Returns the next Bayeux message id. Ids are per-poller and monotonic.</summary>
+        /// <summary>Returns the next Bayeux message id. Ids are per-client and monotonic.</summary>
         private string GetNextId() => Interlocked.Increment(ref _cometdMessageId).ToString();
 
         /// <inheritdoc/>
         public IAuthProvider AuthProvider { get; }
 
         /// <inheritdoc/>
-        public PollerOptions Options { get; }
+        public BayeuxClientOptions Options { get; }
 
         /// <inheritdoc/>
         public string ClientId { get; private set; }
@@ -109,32 +112,39 @@ namespace Bayeux.Client.Extensible.Core
         public int? ConnectInterval { get; private set; } = 0;
 
         /// <inheritdoc/>
-        public event EventHandler<OnPollerDisconnectedEventArgs> OnPollerDisconnected;
+        public event EventHandler<BayeuxDisconnectedEventArgs> OnDisconnected;
 
         /// <inheritdoc/>
-        public event EventHandler<OnPollerErrorEventArgs>? OnError;
+        public event EventHandler<BayeuxErrorEventArgs>? OnError;
+
+        /// <inheritdoc/>
+        public event EventHandler<BayeuxStateChangedEventArgs>? OnStateChanged;
 
         /// <inheritdoc/>
         public IReadOnlyDictionary<string, BayeuxEventHandler> Channels => _channels;
 
-        /// <summary>Creates a poller for one CometD session.</summary>
-        /// <param name="client">
-        /// A long-lived client whose handler has <c>UseCookies = false</c>. It may be shared with
-        /// other pollers and with the application's own requests; it must not be shared between
-        /// different user sessions on the same host. Its <see cref="HttpClient.Timeout"/> must
-        /// exceed the server's <c>advice.timeout</c>, which the poller verifies after the
-        /// handshake. On .NET Framework, also raise
-        /// <c>ServicePointManager.DefaultConnectionLimit</c>: each poller holds one connection open
-        /// permanently, and the default limit is two.
+        /// <inheritdoc/>
+        public BayeuxClientState State => (BayeuxClientState)Volatile.Read(ref _stateCode);
+
+        /// <summary>Creates a client for one Bayeux session.</summary>
+        /// <param name="httpClient">
+        /// A long-lived <see cref="HttpClient"/> whose handler has <c>UseCookies = false</c>. It may be
+        /// shared with other Bayeux clients and with the application's own requests; it must not be
+        /// shared between different user sessions on the same host. With long-polling its
+        /// <see cref="HttpClient.Timeout"/> must exceed the server's <c>advice.timeout</c>, which is
+        /// verified after the handshake. On .NET Framework, also raise
+        /// <c>ServicePointManager.DefaultConnectionLimit</c>: each Bayeux client holds one connection
+        /// open permanently, and the default limit is two.
         /// </param>
         /// <param name="options">Channels, endpoint path and timeouts.</param>
         /// <param name="authProvider">
         /// Authenticates every request. Use <see cref="NoAuthProvider.Instance"/> for servers that
         /// need none.
         /// </param>
-        /// <param name="onPollerDisconnected">
-        /// Handler for <see cref="OnPollerDisconnected"/>. Required, because the poller never
-        /// retries on its own and this is how a caller learns the session ended.
+        /// <param name="onDisconnected">
+        /// Handler for <see cref="OnDisconnected"/>. Required, because without
+        /// <see cref="BayeuxClientOptions.ReconnectOptions"/> the client does not retry on its own,
+        /// and this is how a caller learns the session ended.
         /// </param>
         /// <param name="cookie">
         /// Cookies inherited from a session established elsewhere, such as an application login.
@@ -147,19 +157,19 @@ namespace Bayeux.Client.Extensible.Core
         /// credentials and live data. Defaults to a no-op logger.
         /// </param>
         /// <exception cref="ArgumentNullException">A required argument is <c>null</c>.</exception>
-        /// <exception cref="ArgumentException"><paramref name="client"/> has no base address.</exception>
-        public CometDPoller(
-            HttpClient client,
-            PollerOptions options,
+        /// <exception cref="ArgumentException"><paramref name="httpClient"/> has no base address.</exception>
+        public BayeuxClient(
+            HttpClient httpClient,
+            BayeuxClientOptions options,
             IAuthProvider authProvider,
-            EventHandler<OnPollerDisconnectedEventArgs> onPollerDisconnected,
+            EventHandler<BayeuxDisconnectedEventArgs> onDisconnected,
             CookieContainer? cookie = null,
-            ILogger<CometDPoller>? logger = null)
+            ILogger<BayeuxClient>? logger = null)
         {
-            _client = client ?? throw new ArgumentNullException(nameof(client));
+            _ = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
 
-            if (client.BaseAddress == null)
-                throw new ArgumentException("Client base address can not be null.", nameof(client)); 
+            if (httpClient.BaseAddress == null)
+                throw new ArgumentException("The HttpClient has no base address.", nameof(httpClient));
 
             Options = options ?? throw new ArgumentNullException(nameof(options));
             AuthProvider = authProvider ?? throw new ArgumentNullException(nameof(authProvider));
@@ -167,20 +177,24 @@ namespace Bayeux.Client.Extensible.Core
 
             _channels = new ConcurrentDictionary<string, BayeuxEventHandler>(options.Channels);
 
-            OnPollerDisconnected = onPollerDisconnected ?? throw new ArgumentNullException(nameof(onPollerDisconnected));
-
-            _cookieContainer = cookie ?? new CookieContainer();
-            _logger = logger ?? NullLogger<CometDPoller>.Instance;
-
+            OnDisconnected = onDisconnected ?? throw new ArgumentNullException(nameof(onDisconnected));
+            
+            _logger = logger ?? NullLogger<BayeuxClient>.Instance;
+            _transport = Options.TransportType switch
+            {
+                BayeuxTransportType.LongPolling => new LongPollingTransport(httpClient, authProvider, options.Path, cookie ?? new CookieContainer()),
+                BayeuxTransportType.WebSocket => throw new NotImplementedException("WebSocket transport is not implemented yet."),
+                _ => throw new ArgumentOutOfRangeException(nameof(options.TransportType), options.TransportType, null)
+            };
             _token = _bayeuxCts.Token;
         }
 
         /// <summary>
-        /// Signals the polling loop to stop and returns immediately.
+        /// Signals the connect loop to stop and returns immediately.
         /// </summary>
         /// <remarks>
         /// The loop finishes asynchronously, so it may still send <c>/meta/disconnect</c> and raise
-        /// <see cref="OnPollerDisconnected"/> after this method returns &#8212; using the
+        /// <see cref="OnDisconnected"/> after this method returns &#8212; using the
         /// <see cref="HttpClient"/> that was passed in. Use <see cref="DisposeAsync"/> when the
         /// caller needs shutdown to have completed before it continues.
         /// </remarks>
@@ -189,18 +203,19 @@ namespace Bayeux.Client.Extensible.Core
             if (_isDestroyed)
                 return;
 
-            _isDestroyed = true;
-
             _bayeuxCts.Cancel();
+
+            _isDestroyed = true;
+            _transport.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Stops the polling loop, waits for it to finish, and releases resources.
+        /// Stops the connect loop, waits for it to finish, and releases resources.
         /// </summary>
         /// <returns>A task that completes once the loop has stopped.</returns>
         /// <remarks>
         /// Unlike <see cref="Dispose"/>, the disconnect request and
-        /// <see cref="OnPollerDisconnected"/> have both completed when this returns.
+        /// <see cref="OnDisconnected"/> have both completed when this returns.
         /// </remarks>
         public async ValueTask DisposeAsync()
         {
@@ -225,35 +240,38 @@ namespace Bayeux.Client.Extensible.Core
                     _bayeuxTask = null;
             }
 
+            await _transport.DisposeAsync().ConfigureAwait(false);
             _bayeuxCts.Dispose();
             _channelLock.Dispose();
 
-            _logger.LogDebug("Poller disposed");
+            _logger.LogDebug("Client disposed");
         }
 
         /// <inheritdoc/>
         public async Task ConnectAsync(CancellationToken cancellationToken = default)
         {
             if (_isDestroyed)
-                throw new ObjectDisposedException(nameof(CometDPoller));
+                throw new ObjectDisposedException(nameof(BayeuxClient));
             
             if (_insideDispatch.Value)
                 throw new InvalidOperationException(
-                "ConnectAsync cannot be called from a message handler: the poller's loop is waiting for the "
+                "ConnectAsync cannot be called from a message handler: the client's loop is waiting for the "
                 + "handler to return, so it cannot be restarted from inside it. Call DisconnectAsync in the "
-                + "handler, and reconnect from OnPollerDisconnected, which runs after the loop has finished.");
+                + "handler, and reconnect from OnDisconnected, which runs after the loop has finished.");
 
             await DisconnectAsync(cancellationToken).ConfigureAwait(false);
             using var call = CancellationTokenSource.CreateLinkedTokenSource(_token, cancellationToken);
 
             try
             {
+                ChangeState(BayeuxClientState.Connecting);
                 await SetUpConnectionAsync(call.Token).ConfigureAwait(false);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 _bayeuxCts.Cancel();
 
+                ChangeState(BayeuxClientState.Disconnected, ex);
                 await SendDisconnectAsync().ConfigureAwait(false);
                 throw;
             }
@@ -265,7 +283,7 @@ namespace Bayeux.Client.Extensible.Core
         public async Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             if (_isDestroyed)
-                throw new ObjectDisposedException(nameof(CometDPoller));
+                throw new ObjectDisposedException(nameof(BayeuxClient));
 
             var currentTask = _bayeuxTask;
 
@@ -278,7 +296,10 @@ namespace Bayeux.Client.Extensible.Core
 
                 if (cancellationToken.CanBeCanceled)
                 {
-                    await Task.WhenAny(currentTask, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
+                    using var call = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    await Task.WhenAny(currentTask, Task.Delay(Timeout.Infinite, call.Token)).ConfigureAwait(false);
+
+                    call.Cancel();
                     cancellationToken.ThrowIfCancellationRequested();
                 }
 
@@ -305,11 +326,11 @@ namespace Bayeux.Client.Extensible.Core
         public async Task SubscribeNewChannelsAsync(IDictionary<string, BayeuxEventHandler> channels, CancellationToken cancellationToken = default)
         {
             if (_isDestroyed)
-                throw new ObjectDisposedException(nameof(CometDPoller));
+                throw new ObjectDisposedException(nameof(BayeuxClient));
 
             if (string.IsNullOrEmpty(ClientId))
                 throw new InvalidOperationException(
-                    "No established session. Call ConnectAsync first, or wait: the poller may be "
+                    "No established session. Call ConnectAsync first, or wait: the client may be "
                     + "re-establishing the session after the server invalidated it.");
 
             if (channels == null || channels.Count == 0)
@@ -388,11 +409,11 @@ namespace Bayeux.Client.Extensible.Core
         public async Task UnsubscribeChannelsAsync(IEnumerable<string> channels, CancellationToken cancellationToken = default)
         {
             if (_isDestroyed)
-                throw new ObjectDisposedException(nameof(CometDPoller));
+                throw new ObjectDisposedException(nameof(BayeuxClient));
 
             if (string.IsNullOrEmpty(ClientId))
                 throw new InvalidOperationException(
-                    "No established session. Call ConnectAsync first, or wait: the poller may be "
+                    "No established session. Call ConnectAsync first, or wait: the client may be "
                     + "re-establishing the session after the server invalidated it.");
 
             var requested = channels as IReadOnlyList<string> ?? channels?.ToList();
@@ -488,7 +509,7 @@ namespace Bayeux.Client.Extensible.Core
         public async Task PublishAsync(string channel, object? data, CancellationToken cancellationToken = default)
         {
             if (IsDestroyed)
-                throw new ObjectDisposedException(nameof(CometDPoller));
+                throw new ObjectDisposedException(nameof(BayeuxClient));
 
             ValidatePublishChannel(channel);
 
@@ -496,7 +517,7 @@ namespace Bayeux.Client.Extensible.Core
 
             if (string.IsNullOrEmpty(clientId))
                 throw new InvalidOperationException(
-                    "No established session. Call ConnectAsync first, or wait: the poller may be "
+                    "No established session. Call ConnectAsync first, or wait: the client may be "
                     + "re-establishing the session after the server invalidated it.");
 
             using var call = CancellationTokenSource.CreateLinkedTokenSource(_token, cancellationToken);
@@ -553,7 +574,7 @@ namespace Bayeux.Client.Extensible.Core
                 var clientId = await HandshakeAsync(cancellationToken).ConfigureAwait(false);
 
                 if (_channels.Count > 0)
-                    await SubscribeChannelsAsync(clientId, _channels.Keys, FailureEndsPoller, cancellationToken).ConfigureAwait(false);
+                    await SubscribeChannelsAsync(clientId, _channels.Keys, FailureEndsConnection, cancellationToken).ConfigureAwait(false);
 
                 ClientId = clientId;
             }
@@ -564,7 +585,7 @@ namespace Bayeux.Client.Extensible.Core
         }
 
         /// <summary>
-        /// The polling loop. Runs until the caller cancels, the server ends the session, or an
+        /// The connect loop. Runs until the caller cancels, the server ends the session, or an
         /// error occurs that is not retried; then reports the outcome through the disconnected event.
         /// </summary>
         /// <remarks>
@@ -620,6 +641,7 @@ namespace Bayeux.Client.Extensible.Core
                         {
                             if (Options.ReconnectOptions?.BeforeAttemptAsync is { } beforeAttemptAsync)
                                 await beforeAttemptAsync(_token).ConfigureAwait(false);
+                            
                             retrying = false;
 
                             if (needSetUp)
@@ -634,12 +656,21 @@ namespace Bayeux.Client.Extensible.Core
                         if (verdict == ConnectResult.Stop)
                         {
                             disconnectReason = DisconnectReason.ServerRequirement;
+
                             break;
                         }
                         else if (verdict == ConnectResult.Rehandshake)
+                        {
+                            ChangeState(BayeuxClientState.Reconnecting);
                             needSetUp = true;
+                        }
                         else
+                        {
+                            // Connected only here, after a poll the server answered and let continue:
+                            // a session set up by ConnectAsync is not yet proof that polling works.
+                            ChangeState(BayeuxClientState.Connected);
                             attempts = 0;
+                        }
 
                         await Task.Delay(ConnectInterval ?? 0, _token).ConfigureAwait(false);
                     }
@@ -650,6 +681,7 @@ namespace Bayeux.Client.Extensible.Core
                         ShouldRetrySafely(reconnectOptions, ex))
                     {
                         attempts++;
+                        ChangeState(BayeuxClientState.Reconnecting, ex);
 
                         var delay = reconnectOptions.GetReconnectDelay(attempts, _random.NextDouble());
 
@@ -692,6 +724,7 @@ namespace Bayeux.Client.Extensible.Core
                 if (!_bayeuxCts.IsCancellationRequested)
                     _bayeuxCts.Cancel();
 
+                ChangeState(BayeuxClientState.Disconnected, failure);
                 await TryDisconnectAsync(disconnectReason, failure).ConfigureAwait(false);
             }
         }
@@ -717,7 +750,7 @@ namespace Bayeux.Client.Extensible.Core
             BayeuxResponseMessageModel? refusal = null;
 
             var verdict = ConnectResult.Continue;
-            var messages = await PostCometdAsync([new ConnectRequestModel(ClientId, GetNextId())], _token).ConfigureAwait(false);
+            var messages = await PostCometdAsync([new ConnectRequestModel(ClientId, GetNextId(), _transport.ConnectionType)], _token).ConfigureAwait(false);
 
             foreach (var message in messages)
             {
@@ -767,32 +800,32 @@ namespace Bayeux.Client.Extensible.Core
                     refused.Error, 
                     refused.Advice?.Reconnect,
                     refused.Ext is null ? null : new ReadOnlyDictionary<string, JsonElement>(refused.Ext)),
-                FailureEndsPoller);
+                FailureEndsConnection);
             }
 
             return verdict;
         }
 
         /// <summary>
-        /// Checks that the HTTP client's timeout can outlast a held <c>/meta/connect</c>.
+        /// Checks that the transport's request timeout can outlast a held <c>/meta/connect</c>.
         /// </summary>
         /// <param name="serverTimeoutMs">The server's <c>advice.timeout</c>, or <c>null</c> if absent.</param>
-        /// <exception cref="InvalidOperationException">The client would time out before the server replies.</exception>
+        /// <exception cref="InvalidOperationException">The transport would time out before the server replies.</exception>
         /// <remarks>
         /// Without this the failure looks like a recurring network fault: every long poll aborts on
-        /// a healthy connection once the client's timeout elapses.
+        /// a healthy connection once the HttpClient's timeout elapses.
         /// </remarks>
         private void ValidateClientTimeout(int? serverTimeoutMs)
         {
-            if (_client.Timeout == Timeout.InfiniteTimeSpan || serverTimeoutMs == null)
+            if (_transport.RequestTimeout is not { } limit || serverTimeoutMs == null)
                 return;
 
             var requiredSpan = TimeSpan.FromMilliseconds(serverTimeoutMs.Value) + TimeSpan.FromSeconds(5);
 
-            if (_client.Timeout < requiredSpan)
+            if (limit < requiredSpan)
                 throw RaiseOnError(
                     ErrorSource.Configuration,
-                    $"HttpClient timeout is {_client.Timeout.TotalSeconds:0.#} seconds " +
+                    $"Request timeout is {limit.TotalSeconds:0.#} seconds " +
                     $"that is less than server recommended {requiredSpan.TotalSeconds:0.#} seconds " +
                     "Please raise it to recommended value at least",
                     true);
@@ -823,7 +856,7 @@ namespace Bayeux.Client.Extensible.Core
         /// </para>
         /// <para>
         /// Handler exceptions are reported through the error event and swallowed: a defect in a
-        /// consumer's handler must not stop the poller, and one failing handler must not deny the
+        /// consumer's handler must not stop the client, and one failing handler must not deny the
         /// message to the others.
         /// </para>
         /// </remarks>
@@ -839,8 +872,8 @@ namespace Bayeux.Client.Extensible.Core
             // Never reset, and it does not need to be. A value set on an AsyncLocal inside an async
             // method flows into everything the method calls or awaits - the handlers - but not back
             // out to its caller: once this method returns, the caller sees what it saw before. The
-            // flag is therefore true for the handlers and false again for the polling loop,
-            // OnPollerDisconnected included. It also flows into a Task.Run a handler starts, so a
+            // flag is therefore true for the handlers and false again for the connect loop,
+            // OnDisconnected included. It also flows into a Task.Run a handler starts, so a
             // fire-and-forget ConnectAsync from a handler is refused as well - rightly, since the
             // DisconnectAsync inside it would not wait for the old loop to finish.
             _insideDispatch.Value = true;
@@ -919,7 +952,7 @@ namespace Bayeux.Client.Extensible.Core
 
             ClientId = string.Empty;
 
-            RaiseOnDisconnected(OnPollerDisconnectedEventArgs.Create(reason, failure, disconnectException));
+            RaiseOnDisconnected(BayeuxDisconnectedEventArgs.Create(reason, failure, disconnectException));
         }
 
         /// <summary>
@@ -968,7 +1001,7 @@ namespace Bayeux.Client.Extensible.Core
         /// <param name="clientId">The session id.</param>
         /// <param name="subscriptions">The channel names, sent as a single batch.</param>
         /// <param name="isFatal">
-        /// Whether a rejection ends the poller. True during session setup, where a channel the
+        /// Whether a rejection ends the client. True during session setup, where a channel the
         /// caller asked for is missing and the session is not what was requested; false for
         /// channels added at runtime, where the failure goes back to the caller and polling
         /// continues on the channels that were accepted.
@@ -1083,12 +1116,12 @@ namespace Bayeux.Client.Extensible.Core
         /// </remarks>
         private async Task<string> HandshakeAsync(CancellationToken cancellationToken)
         {
-            var messages = await PostCometdAsync([new HandshakeRequestModel(GetNextId())], cancellationToken, true).ConfigureAwait(false);
+            var messages = await PostCometdAsync([new HandshakeRequestModel(GetNextId(), _transport.ConnectionType)], cancellationToken, true).ConfigureAwait(false);
 
             var message = messages.FirstOrDefault(message => message.Channel == MetaChannels.Handshake);
 
             if (message == null)
-                throw RaiseOnError(ErrorSource.Handshake, "Message in channel /meta/handshake was null.", FailureEndsPoller);
+                throw RaiseOnError(ErrorSource.Handshake, "Message in channel /meta/handshake was null.", FailureEndsConnection);
 
             if (message.IsSuccessful != true)
                 throw RaiseOnError(ErrorSource.Handshake,
@@ -1096,7 +1129,12 @@ namespace Bayeux.Client.Extensible.Core
                         message.Error,
                         message.Advice?.Reconnect,
                         message.Ext is null ? null : new ReadOnlyDictionary<string, JsonElement>(message.Ext)),
-                    FailureEndsPoller);
+                    FailureEndsConnection);
+
+            if (message.SupportedConnectionTypes is { } supported && !supported.Contains(_transport.ConnectionType))
+                throw RaiseOnError(ErrorSource.Configuration,
+                    $"The server does not support the transport {_transport.ConnectionType}. Supported: {string.Join(", ", supported)}",
+                    FailureEndsConnection);
 
             ValidateClientTimeout(message.Advice?.Timeout);
 
@@ -1107,7 +1145,7 @@ namespace Bayeux.Client.Extensible.Core
                 return message.ClientId!;
             }
 
-            throw RaiseOnError(ErrorSource.Handshake, "Failed to receive a valid clientId.", FailureEndsPoller);
+            throw RaiseOnError(ErrorSource.Handshake, "Failed to receive a valid clientId.", FailureEndsConnection);
         }
 
         /// <summary>Sends one Bayeux request and parses the reply.</summary>
@@ -1136,61 +1174,29 @@ namespace Bayeux.Client.Extensible.Core
         /// </para>
         /// </remarks>
         private async Task<BayeuxResponseMessageModel[]> PostCometdAsync(
-            BaseLongPollingRequestModel[] requestModel, 
+            BayeuxRequestModel[] requestModel, 
             CancellationToken cancellationToken,
             bool deferred = false)
         {
-            if (_client.BaseAddress == null)
-                throw new ArgumentException("Base address is not set");
-
-            if (requestModel == null || requestModel.Length == 0)
-                throw new ArgumentException("Request model is null or empty");
-
-            var endpoint = requestModel.First().Endpoint;
-
-            var uri = new Uri(_client.BaseAddress, endpoint is null ? Options.CometdPath : $"{Options.CometdPath}/{endpoint}");
-
             await ProcessOutgoingExtAsync(requestModel, cancellationToken).ConfigureAwait(false);
 
             try
             {
-                using (var request = new HttpRequestMessage(HttpMethod.Post, uri))
-                {
-                    await AuthProvider.ApplyAsync(request, cancellationToken).ConfigureAwait(false);
-                        
-                    ApplyCookies(request, uri);
+                var responseMessages = await _transport.SendAsync(requestModel, cancellationToken).ConfigureAwait(false);
 
-                    request.Content = new StringContent(BaseLongPollingRequestModel.FormLongPollingRequestJson(requestModel), Encoding.UTF8, "application/json");
+                ProcessIncomingExt(responseMessages);
 
-                    using (var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false))
-                    {
-                        SaveCookies(response, uri);
-
-                        if (!response.IsSuccessStatusCode)
-                            throw new BayeuxHttpException(response.StatusCode, response.ReasonPhrase);
-
-                        var responseText = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-
-                        if (string.IsNullOrEmpty(responseText))
-                            return [];
-
-                        var messages = JsonSerializer.Deserialize<BayeuxResponseMessageModel[]>(responseText) ?? [];
-
-                        ProcessIncomingExt(messages);
-
-                        if (deferred)
-                            await ProcessMessagesAsync(messages, deferred).ConfigureAwait(false);
-                        else
-                            // No token: a token here only decides whether the delegate starts, and
-                            // the reply has already arrived - the server will not send its events
-                            // again. The caller's token would drop them when a publish is cancelled
-                            // late; the session's is already cancelled when the disconnect reply
-                            // comes in. Handlers still see cancellation through their own token.
-                            await Task.Run(() => ProcessMessagesAsync(messages, deferred)).ConfigureAwait(false);
-
-                        return messages;
-                    }
-                }
+                if (deferred)
+                    await ProcessMessagesAsync(responseMessages, deferred).ConfigureAwait(false);
+                else
+                    // No token: a token here only decides whether the delegate starts, and
+                    // the reply has already arrived - the server will not send its events
+                    // again. The caller's token would drop them when a publish is cancelled
+                    // late; the session's is already cancelled when the disconnect reply
+                    // comes in. Handlers still see cancellation through their own token.
+                    await Task.Run(() => ProcessMessagesAsync(responseMessages, deferred)).ConfigureAwait(false);
+                
+                return responseMessages;
             }
             catch (Exception ex)
             {   
@@ -1202,7 +1208,7 @@ namespace Bayeux.Client.Extensible.Core
                     RaiseOnError(
                         ErrorSource.Http,
                         ex,
-                        FailureEndsPoller);
+                        FailureEndsConnection);
                 throw;
             }
         }
@@ -1240,46 +1246,17 @@ namespace Bayeux.Client.Extensible.Core
             }
         }
 
-        /// <summary>Attaches this poller's cookies to an outgoing request.</summary>
-        /// <param name="request">The request to decorate.</param>
-        /// <param name="uri">The target, used to select cookies by domain and path.</param>
-        /// <remarks>
-        /// Done per request rather than by the HTTP handler so that pollers sharing one client keep
-        /// separate sessions. This is why the handler must have <c>UseCookies = false</c>.
-        /// </remarks>
-        private void ApplyCookies(HttpRequestMessage request, Uri uri)
-        {
-            var cookieHeader = _cookieContainer.GetCookieHeader(uri);
-
-            if (!string.IsNullOrEmpty(cookieHeader))
-                request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
-        }
-
-        /// <summary>Captures cookies the server set, including CometD's <c>BAYEUX_BROWSER</c>.</summary>
-        /// <param name="response">The response to read.</param>
-        /// <param name="uri">The request target the cookies belong to.</param>
-        private void SaveCookies(HttpResponseMessage response, Uri uri)
-        {
-            if (!response.Headers.TryGetValues("Set-Cookie", out var cookies))
-                return;
-            
-            foreach (var cookie in cookies)
-            {
-                _cookieContainer.SetCookies(uri, cookie);
-            }
-        }
-
         /// <summary>Raises the disconnected event, swallowing anything the handler throws.</summary>
         /// <param name="args">The outcome to report.</param>
         /// <remarks>
         /// The handler runs while the loop is unwinding, so an exception escaping it would replace
         /// the real cause of the shutdown.
         /// </remarks>
-        private void RaiseOnDisconnected(OnPollerDisconnectedEventArgs args)
+        private void RaiseOnDisconnected(BayeuxDisconnectedEventArgs args)
         {
             try
             {
-                OnPollerDisconnected?.Invoke(this, args);
+                OnDisconnected?.Invoke(this, args);
             }
             catch { }
         }
@@ -1287,7 +1264,7 @@ namespace Bayeux.Client.Extensible.Core
         /// <summary>Creates an exception, reports it through the error event, and returns it.</summary>
         /// <param name="source">Which operation failed.</param>
         /// <param name="message">The failure description.</param>
-        /// <param name="isFatal">Whether the poller stops because of it.</param>
+        /// <param name="isFatal">Whether the client stops because of it.</param>
         /// <returns>The exception, for the caller to throw.</returns>
         /// <remarks>
         /// Reporting happens where the exception is created, never in a catch that only passes one
@@ -1299,7 +1276,7 @@ namespace Bayeux.Client.Extensible.Core
 
             try
             {
-                OnError?.Invoke(this, new OnPollerErrorEventArgs(exception, source, isFatal));
+                OnError?.Invoke(this, new BayeuxErrorEventArgs(exception, source, isFatal));
             }
             catch { }
 
@@ -1309,13 +1286,13 @@ namespace Bayeux.Client.Extensible.Core
         /// <summary>Reports an existing exception through the error event and returns it.</summary>
         /// <param name="source">Which operation failed.</param>
         /// <param name="exception">The failure.</param>
-        /// <param name="isFatal">Whether the poller stops because of it.</param>
+        /// <param name="isFatal">Whether the client stops because of it.</param>
         /// <returns>The same exception, for the caller to throw or return.</returns>
         private Exception RaiseOnError(ErrorSource source, Exception exception, bool isFatal = false)
         {
             try
             {
-                OnError?.Invoke(this, new OnPollerErrorEventArgs(exception, source, isFatal));
+                OnError?.Invoke(this, new BayeuxErrorEventArgs(exception, source, isFatal));
             }
             catch { }
 
@@ -1357,7 +1334,7 @@ namespace Bayeux.Client.Extensible.Core
         /// is reported as <see cref="ErrorSource.Ext"/> - not mistaken for an HTTP failure - and
         /// then fails the operation: a message that could not be prepared must not go out.
         /// </remarks>
-        private async Task ProcessOutgoingExtAsync(BaseLongPollingRequestModel[] requestModel, CancellationToken cancellationToken)
+        private async Task ProcessOutgoingExtAsync(BayeuxRequestModel[] requestModel, CancellationToken cancellationToken)
         {
             foreach (var request in requestModel)
             {
@@ -1376,7 +1353,7 @@ namespace Bayeux.Client.Extensible.Core
                         throw RaiseOnError(
                             ErrorSource.Ext,
                             ex,
-                            (request is ConnectRequestModel || request is HandshakeRequestModel) && FailureEndsPoller);
+                            (request is ConnectRequestModel || request is HandshakeRequestModel) && FailureEndsConnection);
                     }
                 }
             }
@@ -1386,7 +1363,7 @@ namespace Bayeux.Client.Extensible.Core
         /// <param name="messages">The messages the server sent back.</param>
         /// <remarks>
         /// A failing extension is reported and skipped, never rethrown: like a failing handler, one
-        /// broken extension must not stop the poller or deny the message to the rest.
+        /// broken extension must not stop the client or deny the message to the rest.
         /// </remarks>
         private void ProcessIncomingExt(BayeuxResponseMessageModel[] messages)
         {
@@ -1424,6 +1401,49 @@ namespace Bayeux.Client.Extensible.Core
             {
                 _logger.LogError(ex, "Exception is thrown while ReconnectOptions.ShouldRetry has been processing.");
                 return false;
+            }
+        }
+
+        /// <summary>Moves to <paramref name="targetState"/> and reports it, if it is a change.</summary>
+        /// <param name="targetState">The state to move to.</param>
+        /// <param name="error">What caused the change, if an error did.</param>
+        /// <remarks>
+        /// <para>
+        /// <c>Interlocked.Exchange</c> rather than a lock: it writes the new state and returns the
+        /// old one in one step, so two threads changing state at once each see the true previous
+        /// value, and only a real change is reported - the loop sets Connected after every
+        /// successful poll. A lock would also be held while the event runs, and a subscriber
+        /// calling back into the client from another thread could then deadlock on it.
+        /// </para>
+        /// <para>
+        /// The event runs on the thread making the change - the loop's for most of them - under the
+        /// same rules as a message handler: <c>_insideDispatch</c> is set for the call, so
+        /// DisconnectAsync from a subscriber only signals instead of waiting for the loop that is
+        /// waiting for it, and ConnectAsync throws. Restored afterwards, because this method is
+        /// synchronous: a value set here stays in the context of the async method that called it -
+        /// ConnectAsync, or the loop - for the rest of that method. From ConnectAsync it would flow
+        /// through Task.Run into the loop, and from the loop into OnDisconnected, where
+        /// reconnecting - the documented way - would then be refused.
+        /// </para>
+        /// </remarks>
+        private void ChangeState(BayeuxClientState targetState, Exception? error = null)
+        {
+            var previousState = (BayeuxClientState)Interlocked.Exchange(ref _stateCode, (int)targetState);
+
+            if (previousState == targetState)
+                return;
+
+            var capturedInsideDispatch = _insideDispatch.Value;
+            _insideDispatch.Value = true;
+
+            try
+            {
+                OnStateChanged?.Invoke(this, new BayeuxStateChangedEventArgs(previousState, targetState, error));
+            }
+            catch { }   // a subscriber's bug must not break the loop, as with the other events
+            finally
+            {
+                _insideDispatch.Value = capturedInsideDispatch;
             }
         }
     }

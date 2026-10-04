@@ -13,7 +13,7 @@ namespace Bayeux.Client.Extensible.Core
     /// <remarks>
     /// <para>
     /// A refusal, not a goodbye. A server that simply ends a session answers successfully, or sends
-    /// <c>/meta/disconnect</c>; that stops the poller with
+    /// <c>/meta/disconnect</c>; that stops the client with
     /// <see cref="DisconnectReason.ServerRequirement"/> and no error. This exception stops it with
     /// <see cref="DisconnectReason.Failed"/>, so the cause reaches the caller and a reconnect
     /// policy can decide what to do about it.
@@ -29,7 +29,7 @@ namespace Bayeux.Client.Extensible.Core
         public string? Error { get; }
 
         /// <summary>
-        /// <c>advice.reconnect</c> from the reply - <c>none</c> for every refusal the poller raises
+        /// <c>advice.reconnect</c> from the reply - <c>none</c> for every refusal the client raises
         /// this for - or <c>null</c> when the server gave no advice.
         /// </summary>
         public string? Reconnect { get; }

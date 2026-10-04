@@ -12,7 +12,7 @@ namespace Bayeux.Client.Extensible.Core
     {
         /// <summary>
         /// Called for every outgoing message, before it is serialised. May add to
-        /// <see cref="BaseLongPollingRequestModel.Ext"/>. Asynchronous because an extension may
+        /// <see cref="BayeuxRequestModel.Ext"/>. Asynchronous because an extension may
         /// have to obtain something before the message can go out - a fresh token for ext-based
         /// authentication being the usual case. Synchronous work returns
         /// <see cref="Task.CompletedTask"/>, which allocates nothing.
@@ -21,7 +21,7 @@ namespace Bayeux.Client.Extensible.Core
         /// <param name="cancellationToken">
         /// The token of the operation sending this message: the session's own for the long poll, the
         /// caller's for connect, subscribe and unsubscribe, the disconnect timeout for the goodbye.
-        /// Pass it to anything the extension awaits, so that stopping the poller or giving up on a
+        /// Pass it to anything the extension awaits, so that stopping the client or giving up on a
         /// call is not held up by an extension's I/O. A cancellation it causes is not an extension
         /// failure.
         /// </param>
@@ -30,10 +30,10 @@ namespace Bayeux.Client.Extensible.Core
         /// Called once per message, not once per HTTP request: five subscriptions in one batch are
         /// five calls. Throwing stops the message from being sent and fails the operation.
         /// </remarks>
-        Task OutgoingAsync(BaseLongPollingRequestModel requestModel, CancellationToken cancellationToken);
+        Task OutgoingAsync(BayeuxRequestModel requestModel, CancellationToken cancellationToken);
 
         /// <summary>
-        /// Called for every incoming message, before the poller acts on it and before any handler
+        /// Called for every incoming message, before the client acts on it and before any handler
         /// sees it. Synchronous on purpose: it records what arrived, and awaiting here would delay
         /// delivery of every event behind the extension's I/O.
         /// </summary>

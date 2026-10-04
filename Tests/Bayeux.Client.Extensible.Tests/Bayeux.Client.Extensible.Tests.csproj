@@ -50,7 +50,7 @@
   </ItemGroup>
 
   <!-- The Salesforce replay extension is a sample, not part of the library, but it is the one real
-       extension in the repository; compiled in here, it is exercised through the actual poller.
+       extension in the repository; compiled in here, it is exercised through the actual client.
        Linked rather than referenced: the samples project is an executable for net10.0 only, and
        this suite also builds for net472. -->
   <ItemGroup>

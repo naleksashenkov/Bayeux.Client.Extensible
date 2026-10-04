@@ -11,7 +11,7 @@ namespace Bayeux.Client.Extensible.Core
     /// </summary>
     /// <param name="message">The event: the channel it arrived on, its data and any <c>ext</c>.</param>
     /// <param name="cancellationToken">
-    /// Cancelled when the poller stops. Pass it to whatever the handler awaits.
+    /// Cancelled when the client stops. Pass it to whatever the handler awaits.
     /// </param>
     /// <returns>A task that completes when the event has been handled.</returns>
     /// <remarks>
@@ -29,14 +29,14 @@ namespace Bayeux.Client.Extensible.Core
     /// </para>
     /// <para>
     /// <b>Exceptions</b> are reported through <c>OnError</c> as <c>ErrorSource.Handler</c> and do not
-    /// stop the poller. Every other handler for the same event still receives it.
+    /// stop the client. Every other handler for the same event still receives it.
     /// </para>
     /// <para>
-    /// <b>Calling the poller from a handler.</b> <c>SubscribeNewChannelsAsync</c> and
+    /// <b>Calling the client from a handler.</b> <c>SubscribeNewChannelsAsync</c> and
     /// <c>UnsubscribeChannelsAsync</c> may be awaited. <c>DisconnectAsync</c> may be awaited too,
     /// but from here it only signals: the loop is waiting for this handler, so it stops once the
     /// handler returns. <c>ConnectAsync</c> throws <see cref="InvalidOperationException"/> - reconnect
-    /// from <c>OnPollerDisconnected</c>, which runs after the loop has finished.
+    /// from <c>OnDisconnected</c>, which runs after the loop has finished.
     /// </para>
     /// <para>
     /// A handler may run on any thread; do not rely on a particular thread or synchronization
@@ -50,23 +50,23 @@ namespace Bayeux.Client.Extensible.Core
     {
         /// <summary>
         /// Wraps a handler that wants <typeparamref name="T"/> into a <see cref="BayeuxEventHandler"/>
-        /// the poller can call.
+        /// the client can call.
         /// </summary>
         /// <typeparam name="T">The type the event's data is read as.</typeparam>
         /// <param name="handler">
         /// Receives the data, the whole event - for its channel or <c>ext</c> - and the token.
         /// </param>
-        /// <returns>A handler for <see cref="PollerOptions"/> or <c>SubscribeNewChannelsAsync</c>.</returns>
+        /// <returns>A handler for <see cref="BayeuxClientOptions"/> or <c>SubscribeNewChannelsAsync</c>.</returns>
         /// <remarks>
         /// <para>
-        /// The data is read for every event, when it is delivered, with the poller's
-        /// <see cref="PollerOptions.JsonSerializerOptions"/>. Nothing in the poller changes: to it
+        /// The data is read for every event, when it is delivered, with the client's
+        /// <see cref="BayeuxClientOptions.JsonSerializerOptions"/>. Nothing in the client changes: to it
         /// this is an ordinary handler.
         /// </para>
         /// <para>
         /// Data that does not fit <typeparamref name="T"/> throws a <see cref="JsonException"/>,
         /// which is reported like any handler exception - through <c>OnError</c> as
-        /// <see cref="ErrorSource.Handler"/> - and the poller carries on. A <c>null</c> payload
+        /// <see cref="ErrorSource.Handler"/> - and the client carries on. A <c>null</c> payload
         /// reaches the handler as <c>null</c>.
         /// </para>
         /// <code>
@@ -104,15 +104,17 @@ namespace Bayeux.Client.Extensible.Core
         /// </summary>
         public IReadOnlyDictionary<string, JsonElement>? Ext { get; }
 
-        // The poller's, so typed reads follow the same rules as everything it sends.
+        // The client's, so typed reads follow the same rules as everything it sends.
         private readonly JsonSerializerOptions _jsonSerializerOptions;
+
+        private static readonly JsonSerializerOptions _defaultJsonSerializerOptions = new(JsonSerializerDefaults.Web);
 
         /// <summary>Reads <see cref="Data"/> as <typeparamref name="T"/>.</summary>
         /// <typeparam name="T">The type to read the data as.</typeparam>
         /// <returns>The data, or <c>null</c> when the payload is JSON <c>null</c>.</returns>
         /// <exception cref="JsonException">The data does not fit <typeparamref name="T"/>.</exception>
         /// <remarks>
-        /// Uses the poller's <see cref="PollerOptions.JsonSerializerOptions"/> - camelCase names by
+        /// Uses the client's <see cref="BayeuxClientOptions.JsonSerializerOptions"/> - camelCase names by
         /// default. Reads afresh on every call; keep the result rather than calling it repeatedly.
         /// </remarks>
         public T? GetData<T>() => Data.Deserialize<T>(_jsonSerializerOptions);
@@ -122,11 +124,11 @@ namespace Bayeux.Client.Extensible.Core
         /// <param name="data">The event's payload.</param>
         /// <param name="ext">Extension data, or <c>null</c>.</param>
         /// <param name="jsonSerializerOptions">
-        /// How <see cref="GetData{T}"/> reads the data, or <c>null</c> for the poller's default:
+        /// How <see cref="GetData{T}"/> reads the data, or <c>null</c> for the client's default:
         /// <see cref="JsonSerializerDefaults.Web"/>.
         /// </param>
         /// <remarks>
-        /// The poller creates these for real deliveries. The constructor is public so that a
+        /// The client creates these for real deliveries. The constructor is public so that a
         /// handler can be unit-tested by calling it with an event built by the test; the options
         /// come last and are optional so that such tests need not mention them.
         /// </remarks>
@@ -139,7 +141,7 @@ namespace Bayeux.Client.Extensible.Core
             Channel = channel;
             Data = data;
             Ext = ext;
-            _jsonSerializerOptions = jsonSerializerOptions ?? new(JsonSerializerDefaults.Web);
+            _jsonSerializerOptions = jsonSerializerOptions ?? _defaultJsonSerializerOptions;
         }
     }
 }

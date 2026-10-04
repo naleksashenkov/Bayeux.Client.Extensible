@@ -7,33 +7,33 @@ using Bayeux.Client.Extensible.Authentication;
 namespace Bayeux.Client.Extensible.Core
 {
     /// <summary>
-    /// A Bayeux long-polling client. One instance owns exactly one CometD session.
+    /// A Bayeux client. One instance owns exactly one Bayeux session.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The poller runs in the background: <see cref="ConnectAsync"/> returns once the session is
+    /// The client runs in the background: <see cref="ConnectAsync"/> returns once the session is
     /// established, messages are delivered to the handlers registered in
-    /// <see cref="Channels"/>, and <see cref="OnPollerDisconnected"/> reports that
+    /// <see cref="Channels"/>, and <see cref="OnDisconnected"/> reports that
     /// the loop has ended. Nothing needs to be awaited in between.
     /// </para>
     /// <para>
     /// Errors are not retried. Any failure ends the session and raises
-    /// <see cref="OnPollerDisconnected"/> with <see cref="DisconnectReason.Failed"/>; reconnecting is
+    /// <see cref="OnDisconnected"/> with <see cref="DisconnectReason.Failed"/>; reconnecting is
     /// the caller's decision.
     /// </para>
     /// <para>
     /// Instance members are not thread-safe. Drive the lifecycle from a single thread.
     /// </para>
     /// </remarks>
-    public interface IBayeuxPoller : IDisposable, IAsyncDisposable
+    public interface IBayeuxClient : IDisposable, IAsyncDisposable
     {
         /// <summary>The provider that authenticates outgoing requests.</summary>
         IAuthProvider AuthProvider { get; }
 
-        /// <summary>The configuration this poller was created with.</summary>
-        PollerOptions Options { get; }
+        /// <summary>The configuration this client was created with.</summary>
+        BayeuxClientOptions Options { get; }
 
-        /// <summary>Whether the poller has been disposed and can no longer be used.</summary>
+        /// <summary>Whether the client has been disposed and can no longer be used.</summary>
         bool IsDestroyed { get; }
 
         /// <summary>
@@ -47,42 +47,71 @@ namespace Bayeux.Client.Extensible.Core
         /// because a session whose subscriptions failed is not a session the caller asked for.
         /// </para>
         /// <para>
-        /// It empties and fills again on every re-handshake inside the polling loop, so an empty
-        /// value on a running poller is normal recovery, not a failure. Treat it as the session id
-        /// to correlate with server logs, not as a connection flag to poll: it is written by the
-        /// poller's own task and read by yours, with no synchronisation between them.
+        /// It empties and fills again on every re-handshake inside the connect loop, so an empty
+        /// value on a running client is normal recovery, not a failure. Treat it as the session id
+        /// to correlate with server logs, not as a connection flag: it is written by the client's
+        /// own task and read by yours, with no synchronisation between them. Whether the client is
+        /// connected is what <see cref="State"/> is for.
         /// </para>
         /// </remarks>
         string ClientId { get; }
 
         /// <summary>
-        /// Raised once when the polling loop stops, with the reason and any error involved.
+        /// Raised once when the connect loop stops, with the reason and any error involved.
         /// </summary>
         /// <remarks>
         /// Raised only after a session was established; a failed <see cref="ConnectAsync"/> throws
-        /// instead. The handler runs on the poller's own task, after the loop has finished, so it may
+        /// instead. The handler runs on the client's own task, after the loop has finished, so it may
         /// call <see cref="ConnectAsync"/> directly to reconnect. Exceptions thrown by the handler are
         /// swallowed. Note that reconnecting here with no delay retries as fast as the server can
         /// refuse &#8212; pace it yourself.
         /// </remarks>
-        event EventHandler<OnPollerDisconnectedEventArgs> OnPollerDisconnected;
+        event EventHandler<BayeuxDisconnectedEventArgs> OnDisconnected;
 
         /// <summary>
-        /// Raised for each error the poller observes. May fire any number of times;
-        /// <see cref="OnPollerErrorEventArgs.IsFatal"/> says whether the poller is about to stop.
+        /// Raised for each error the client observes. May fire any number of times;
+        /// <see cref="BayeuxErrorEventArgs.IsFatal"/> says whether the client is about to stop.
         /// </summary>
         /// <remarks>Exceptions thrown by subscribers are swallowed.</remarks>
-        event EventHandler<OnPollerErrorEventArgs>? OnError;
+        event EventHandler<BayeuxErrorEventArgs>? OnError;
+
+        /// <summary>Where the client is in its life: see <see cref="BayeuxClientState"/>.</summary>
+        /// <remarks>
+        /// <para>
+        /// <see cref="BayeuxClientState.Connected"/> means a <c>/meta/connect</c> has succeeded, not merely
+        /// that <see cref="ConnectAsync"/> returned: between the two the state is still
+        /// <see cref="BayeuxClientState.Connecting"/>. Servers answer the first connect of a session at
+        /// once, so the gap is short.
+        /// </para>
+        /// <para>
+        /// A snapshot: by the time a caller acts on it the client may have moved on. To follow the
+        /// changes, use <see cref="OnStateChanged"/>.
+        /// </para>
+        /// </remarks>
+        BayeuxClientState State { get; }
+
+        /// <summary>Raised on every change of <see cref="State"/>, and only on a change.</summary>
+        /// <remarks>
+        /// <para>
+        /// Runs on the thread that made the change - for most changes the connect loop - before the
+        /// client goes on, so a subscriber should be quick. The same rules as a message handler
+        /// apply: <see cref="DisconnectAsync"/> from a subscriber only signals the stop, and
+        /// <see cref="ConnectAsync"/> throws. Reconnect from <see cref="OnDisconnected"/>,
+        /// which is raised after the change to <see cref="BayeuxClientState.Disconnected"/>.
+        /// </para>
+        /// <para>Exceptions thrown by subscribers are swallowed.</para>
+        /// </remarks>
+        event EventHandler<BayeuxStateChangedEventArgs>? OnStateChanged;
 
         /// <summary>
-        /// The channels this poller is subscribed to now, each with the handler invoked for its
+        /// The channels this client is subscribed to now, each with the handler invoked for its
         /// messages. Resubscribed automatically after every handshake, so the set survives a
         /// reconnect.
         /// </summary>
         /// <remarks>
         /// <para>
-        /// Starts as a copy of <see cref="PollerOptions.Channels"/> and belongs to this poller alone:
-        /// two pollers built from one options object never see each other's subscriptions.
+        /// Starts as a copy of <see cref="BayeuxClientOptions.Channels"/> and belongs to this client alone:
+        /// two clients built from one options object never see each other's subscriptions.
         /// </para>
         /// <para>
         /// Keys may be exact channel names or Bayeux patterns: <c>/a/*</c> matches one further
@@ -110,13 +139,13 @@ namespace Bayeux.Client.Extensible.Core
         /// running: that lasts until <see cref="DisconnectAsync"/>, disposal, or the server ends it.
         /// </param>
         /// <returns>A task that completes once the session is established and polling has started.</returns>
-        /// <exception cref="ObjectDisposedException">The poller has been disposed.</exception>
+        /// <exception cref="ObjectDisposedException">The client has been disposed.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled before setup completed.</exception>
         /// <exception cref="InvalidOperationException">
         /// The handshake was rejected, returned no client id, or the server's hold time exceeds the
         /// HTTP client's timeout. Also thrown, before anything is sent, when called from inside a
         /// message handler: the loop is waiting for that handler, so it cannot be restarted from there.
-        /// Reconnect from <see cref="OnPollerDisconnected"/> instead.
+        /// Reconnect from <see cref="OnDisconnected"/> instead.
         /// </exception>
         /// <exception cref="BayeuxSubscriptionException">
         /// The server rejected one or more of the configured channels. Setup does not continue with a
@@ -124,7 +153,7 @@ namespace Bayeux.Client.Extensible.Core
         /// session they requested.
         /// </exception>
         /// <remarks>
-        /// Setup failures are reported by throwing, not through <see cref="OnPollerDisconnected"/>,
+        /// Setup failures are reported by throwing, not through <see cref="OnDisconnected"/>,
         /// because no session was established. Any half-created session is released before the
         /// exception propagates.
         /// </remarks>
@@ -145,14 +174,14 @@ namespace Bayeux.Client.Extensible.Core
         /// as well.
         /// </param>
         /// <returns>A task that completes once the server has accepted the subscriptions.</returns>
-        /// <exception cref="ObjectDisposedException">The poller has been disposed.</exception>
+        /// <exception cref="ObjectDisposedException">The client has been disposed.</exception>
         /// <exception cref="OperationCanceledException">
         /// <paramref name="cancellationToken"/> was cancelled, or the session stopped, before the server answered.
         /// Nothing from this batch is subscribed.
         /// </exception>
         /// <exception cref="ArgumentException"><paramref name="channels"/> is <c>null</c> or empty.</exception>
         /// <exception cref="InvalidOperationException">
-        /// There is no established session &#8212; either the poller was never connected, or it is
+        /// There is no established session &#8212; either the client was never connected, or it is
         /// re-establishing the session after the server invalidated it &#8212; or every requested
         /// channel was already registered.
         /// </exception>
@@ -190,14 +219,14 @@ namespace Bayeux.Client.Extensible.Core
         /// still consider those subscriptions live. Stopping the session cancels the call as well.
         /// </param>
         /// <returns>A task that completes once the server has accepted the unsubscribes.</returns>
-        /// <exception cref="ObjectDisposedException">The poller has been disposed.</exception>
+        /// <exception cref="ObjectDisposedException">The client has been disposed.</exception>
         /// <exception cref="OperationCanceledException">
         /// <paramref name="cancellationToken"/> was cancelled, or the session stopped, before the server answered.
         /// Every channel in the batch is still subscribed.
         /// </exception>
         /// <exception cref="ArgumentException"><paramref name="channels"/> is <c>null</c> or empty.</exception>
         /// <exception cref="InvalidOperationException">
-        /// There is no established session &#8212; either the poller was never connected, or it is
+        /// There is no established session &#8212; either the client was never connected, or it is
         /// re-establishing the session after the server invalidated it &#8212; or none of the requested
         /// channels was registered.
         /// </exception>
@@ -218,20 +247,20 @@ namespace Bayeux.Client.Extensible.Core
         Task UnsubscribeChannelsAsync(IEnumerable<string> channels, CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Stops the polling loop, waits for it to finish, and releases the session on the server.
+        /// Stops the connect loop, waits for it to finish, and releases the session on the server.
         /// </summary>
         /// <param name="cancellationToken">
         /// Bounds only the wait. The stop itself cannot be cancelled: it is signalled before the wait
         /// begins, and the loop goes on stopping in the background if the caller stops waiting.
         /// </param>
         /// <returns>A task that completes once the loop has stopped.</returns>
-        /// <exception cref="ObjectDisposedException">The poller has been disposed.</exception>
+        /// <exception cref="ObjectDisposedException">The client has been disposed.</exception>
         /// <exception cref="OperationCanceledException">
         /// <paramref name="cancellationToken"/> was cancelled before the loop finished. The loop is still stopping.
         /// </exception>
         /// <remarks>
         /// <para>
-        /// Safe to call when nothing is running. <see cref="OnPollerDisconnected"/> is raised by the
+        /// Safe to call when nothing is running. <see cref="OnDisconnected"/> is raised by the
         /// loop as it ends, with <see cref="DisconnectReason.TokenCancellation"/>. A running handler is
         /// waited for; its cancellation token is cancelled first.
         /// </para>
@@ -248,7 +277,7 @@ namespace Bayeux.Client.Extensible.Core
         /// server itself. Not a meta channel, and not a wildcard.
         /// </param>
         /// <param name="data">
-        /// The payload, serialized with <see cref="PollerOptions.JsonSerializerOptions"/> -
+        /// The payload, serialized with <see cref="BayeuxClientOptions.JsonSerializerOptions"/> -
         /// camelCase names by default, so a property <c>OrderId</c> goes out as <c>orderId</c>. A
         /// <see cref="System.Text.Json.JsonElement"/> is sent as it is.
         /// </param>
@@ -264,11 +293,11 @@ namespace Bayeux.Client.Extensible.Core
         /// </exception>
         /// <exception cref="BayeuxPublishException">The server refused the message.</exception>
         /// <exception cref="BayeuxHttpException">The server answered with an HTTP error.</exception>
-        /// <exception cref="ObjectDisposedException">The poller has been disposed.</exception>
-        /// <exception cref="OperationCanceledException">The token was cancelled, or the poller stopped.</exception>
+        /// <exception cref="ObjectDisposedException">The client has been disposed.</exception>
+        /// <exception cref="OperationCanceledException">The token was cancelled, or the client stopped.</exception>
         /// <remarks>
         /// <para>
-        /// <b>Never retried,</b> not even with <see cref="PollerOptions.ReconnectOptions"/>. A publish
+        /// <b>Never retried,</b> not even with <see cref="BayeuxClientOptions.ReconnectOptions"/>. A publish
         /// is not idempotent: repeating one after a timeout may deliver it twice. Whether to try
         /// again is the caller's decision. Failures are thrown, not reported through
         /// <see cref="OnError"/>, and do not affect the session.

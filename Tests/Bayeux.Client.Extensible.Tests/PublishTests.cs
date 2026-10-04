@@ -11,9 +11,9 @@ using Xunit;
 
 namespace Bayeux.Client.Extensible.Tests;
 
-/// <summary><see cref="CometDPoller.PublishAsync"/>: what goes out, and what a reply may contain.</summary>
-/// <remarks>Part of <see cref="CometDPollerTests"/> to share its helpers.</remarks>
-public partial class CometDPollerTests
+/// <summary><see cref="BayeuxClient.PublishAsync"/>: what goes out, and what a reply may contain.</summary>
+/// <remarks>Part of <see cref="BayeuxClientTests"/> to share its helpers.</remarks>
+public partial class BayeuxClientTests
 {
     // The request body the fake server recorded for the one publish a test made.
     private static JsonElement LastPublishRequest(FakeBayeuxServer server)
@@ -31,17 +31,17 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/unrelated");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
-        await poller.PublishAsync("/chat/room1", new { text = "hi" });
+        await client.PublishAsync("/chat/room1", new { text = "hi" });
 
         // The base path, with no type appended: only meta messages carry one.
         var message = LastPublishRequest(server);
 
         Assert.Equal("/chat/room1", message.GetProperty("channel").GetString());
         Assert.Equal("hi", message.GetProperty("data").GetProperty("text").GetString());
-        Assert.Equal(poller.ClientId, message.GetProperty("clientId").GetString());
+        Assert.Equal(client.ClientId, message.GetProperty("clientId").GetString());
         Assert.False(string.IsNullOrEmpty(message.GetProperty("id").GetString()));
         Assert.False(message.TryGetProperty("ext", out _));
     }
@@ -54,11 +54,11 @@ public partial class CometDPollerTests
 
         var received = new ConcurrentQueue<JsonElement>();
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsFor("/chat/**", On(data => received.Enqueue(data))), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
-        await poller.PublishAsync("/chat/room1", new { text = "hi" });
+        await client.PublishAsync("/chat/room1", new { text = "hi" });
 
         // The broadcast arrives once, as an event. The reply to the publish - same channel,
         // "successful" and no data - is not an event, and must not reach the handler as one
@@ -77,14 +77,14 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, received) = Options("/chat/room1");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         // CometD delivers to every subscriber, the publisher included, and may do it in the very
         // response to the publish. Documented behaviour, not something to filter out.
         server.EchoPublishesInReply = true;
 
-        await poller.PublishAsync("/chat/room1", new { text = "echo" });
+        await client.PublishAsync("/chat/room1", new { text = "echo" });
 
         // Delivered before PublishAsync returned: events in a reply are handled before the
         // reply itself is.
@@ -101,20 +101,20 @@ public partial class CometDPollerTests
 
         var raised = false;
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
+        await client.ConnectAsync();
 
         server.RejectPublishFor("/chat/closed");
 
         var refused = await Assert.ThrowsAsync<BayeuxPublishException>(
-            () => poller.PublishAsync("/chat/closed", new { text = "hi" }));
+            () => client.PublishAsync("/chat/closed", new { text = "hi" }));
 
         Assert.Equal("/chat/closed", refused.Channel);
         Assert.Equal("403:/chat/closed:Publish denied", refused.Error);
 
         // A refused message is the caller's problem, not the session's.
         Assert.False(raised);
-        Assert.False(string.IsNullOrEmpty(poller.ClientId));
+        Assert.False(string.IsNullOrEmpty(client.ClientId));
     }
 
     [Fact]
@@ -125,15 +125,15 @@ public partial class CometDPollerTests
         var (options, _) = Options("/topic/unrelated");
 
         var raised = false;
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         server.NextPublishHttpStatus = 503;
 
-        var failed = await Assert.ThrowsAsync<BayeuxHttpException>(() => poller.PublishAsync("/chat/room1", new { }));
+        var failed = await Assert.ThrowsAsync<BayeuxHttpException>(() => client.PublishAsync("/chat/room1", new { }));
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.StatusCode);
 
@@ -150,12 +150,12 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/unrelated");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.OmitNextPublishReply = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => poller.PublishAsync("/chat/room1", new { }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.PublishAsync("/chat/room1", new { }));
     }
 
     [Fact]
@@ -165,18 +165,18 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/unrelated");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         // Missing, unrooted, reserved for the protocol, and wildcards - which name sets of
         // channels to subscribe to, while a message goes to exactly one.
         foreach (var channel in new[] { null!, "", "chat/room1", "/meta/connect", "/chat/*", "/chat/**" })
-            await Assert.ThrowsAsync<ArgumentException>("channel", () => poller.PublishAsync(channel, new { }));
+            await Assert.ThrowsAsync<ArgumentException>("channel", () => client.PublishAsync(channel, new { }));
 
         Assert.Empty(server.PublishesSnapshot);
 
         // A service channel is a message to the server itself, and allowed.
-        await poller.PublishAsync("/service/echo", new { });
+        await client.PublishAsync("/service/echo", new { });
         Assert.Single(server.PublishesSnapshot);
     }
 
@@ -187,13 +187,13 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/unrelated");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => poller.PublishAsync("/chat/room1", new { }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.PublishAsync("/chat/room1", new { }));
         Assert.Empty(server.PublishesSnapshot);
 
-        poller.Dispose();
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => poller.PublishAsync("/chat/room1", new { }));
+        client.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => client.PublishAsync("/chat/room1", new { }));
     }
 
     [Fact]
@@ -202,20 +202,20 @@ public partial class CometDPollerTests
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
 
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
         var published = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        IBayeuxPoller? poller = null;
+        IBayeuxClient? client = null;
 
         // Publishing takes no lock, so awaiting it from a handler - the loop waiting on that very
         // handler - cannot deadlock the way a blocking subscribe once did.
         var options = OptionsFor("/topic/in", async (e, token) =>
         {
-            await poller!.PublishAsync("/topic/out", new { reply = true }, token);
+            await client!.PublishAsync("/topic/out", new { reply = true }, token);
             published.TrySetResult(true);
         });
 
-        await using var created = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        poller = created;
+        await using var created = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        client = created;
         created.OnError += (_, e) => errors.Enqueue(e);
         await created.ConnectAsync();
 
@@ -243,11 +243,11 @@ public partial class CometDPollerTests
             }
         };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsWith(extension, "/topic/unrelated"), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
-        await poller.PublishAsync("/chat/room1", new { text = "hi" });
+        await client.PublishAsync("/chat/room1", new { text = "hi" });
 
         Assert.Equal("abc", LastPublishRequest(server).GetProperty("ext").GetProperty("signature").GetString());
     }

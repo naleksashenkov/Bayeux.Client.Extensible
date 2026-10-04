@@ -10,13 +10,13 @@ namespace Bayeux.Client.Extensible.Authentication
     /// <remarks>
     /// <para>
     /// Implementations never observe responses. Recognising that a request was rejected is the
-    /// poller's job; knowing how to produce credentials is this one's.
+    /// client's job; knowing how to produce credentials is this one's.
     /// </para>
     /// <para>
     /// An implementation must support replacing its credentials in place and must be safe to use
-    /// from several threads: the poller resolves the provider once and holds that instance for its
+    /// from several threads: the client resolves the provider once and holds that instance for its
     /// lifetime, so a provider that requires reconstruction cannot rotate credentials without
-    /// tearing down the CometD session. Any field read by <see cref="ApplyAsync"/> and written by
+    /// tearing down the Bayeux session. Any field read by <see cref="ApplyAsync"/> and written by
     /// callers must therefore be declared <c>volatile</c>.
     /// </para>
     /// </remarks>
@@ -29,7 +29,7 @@ namespace Bayeux.Client.Extensible.Authentication
         /// <param name="request">The request to decorate. Headers may be added or replaced.</param>
         /// <param name="cancellationToken">Cancels the operation.</param>
         /// <remarks>
-        /// This runs on the polling loop's hot path. Implementations should read cached state and
+        /// This runs on the connect loop's hot path. Implementations should read cached state and
         /// return <see cref="Task.CompletedTask"/>; avoid network I/O unless credentials genuinely
         /// have to be acquired on first use.
         /// </remarks>
@@ -38,13 +38,13 @@ namespace Bayeux.Client.Extensible.Authentication
 
     /// <summary>
     /// An <see cref="IAuthProvider"/> whose credentials can be replaced at runtime without
-    /// recreating the provider or restarting the poller.
+    /// recreating the provider or restarting the client.
     /// </summary>
     /// <typeparam name="TAuthData">The credential type this provider accepts.</typeparam>
     /// <remarks>
-    /// The poller only ever depends on the non-generic <see cref="IAuthProvider"/>. This interface
+    /// The client only ever depends on the non-generic <see cref="IAuthProvider"/>. This interface
     /// exists for the caller, which knows the concrete credential type and holds the provider
-    /// instance it passed to the poller.
+    /// instance it passed to the client.
     /// </remarks>
     public interface IAuthProvider<TAuthData> : IAuthProvider
     {
@@ -59,7 +59,7 @@ namespace Bayeux.Client.Extensible.Authentication
         event EventHandler<OnCredentialsUpdatedEventArgs>? OnCredentialsUpdated;
 
         /// <summary>
-        /// Replaces the credentials used by subsequent requests. Safe to call while the poller is
+        /// Replaces the credentials used by subsequent requests. Safe to call while the client is
         /// running; the change takes effect on the next request with no reconnect.
         /// </summary>
         /// <param name="credentials">The new credentials.</param>

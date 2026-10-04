@@ -12,7 +12,7 @@ namespace Bayeux.Client.Extensible.Core
     /// names are fixed by the protocol anyway, so code outside the library - an
     /// <c>IBayeuxExtension</c> implementation above all - spells them out itself.
     /// </remarks>
-    internal static class CometDConstants
+    internal static class BayeuxConstants
     {
         /// <summary>
         /// The Bayeux meta channels: the protocol's own control messages, as opposed to the

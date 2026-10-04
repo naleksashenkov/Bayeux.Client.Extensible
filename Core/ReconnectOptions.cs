@@ -7,15 +7,15 @@ using System.Net;
 namespace Bayeux.Client.Extensible.Core
 {
     /// <summary>
-    /// Opt-in reconnection: what the poller does when an error ends an established session.
-    /// Without it, the first error stops the poller.
+    /// Opt-in reconnection: what the client does when an error ends an established session.
+    /// Without it, the first error stops the client.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// After a failure the poller waits, then tries again. A transport failure - no answer, a
+    /// After a failure the client waits, then tries again. A transport failure - no answer, a
     /// timeout, an HTTP error - leaves the session alive on the server for a while, with the events
-    /// published meanwhile queued in it, so the poller first retries <c>/meta/connect</c> in the same
-    /// session. A refusal ends the session, and the poller handshakes again and resubscribes every
+    /// published meanwhile queued in it, so the client first retries <c>/meta/connect</c> in the same
+    /// session. A refusal ends the session, and the client handshakes again and resubscribes every
     /// channel. Attempt <c>n</c> waits a random time between zero and
     /// <c>min(MaxDelay, InitialDelay × Multiplier^(n-1))</c>: the bound grows so that a server
     /// that is down is not hammered, and the randomness keeps clients dropped together by one
@@ -32,7 +32,7 @@ namespace Bayeux.Client.Extensible.Core
     /// is empty, a subscribe or unsubscribe fails at once, and a stop sends nothing. After a
     /// transport failure the session is kept: <c>ClientId</c> stays, and a stop closes the session
     /// as usual - which, if the server is still unreachable, waits up to
-    /// <see cref="PollerOptions.DisconnectTimeout"/>.
+    /// <see cref="BayeuxClientOptions.DisconnectTimeout"/>.
     /// </para>
     /// </remarks>
     public sealed class ReconnectOptions
@@ -52,7 +52,7 @@ namespace Bayeux.Client.Extensible.Core
         public double Multiplier { get; }
 
         /// <summary>
-        /// Failed attempts in a row before the poller gives up, or <c>null</c> to keep trying
+        /// Failed attempts in a row before the client gives up, or <c>null</c> to keep trying
         /// until it is stopped. <c>null</c> by default: errors that cannot fix themselves are
         /// excluded by <see cref="ShouldRetry"/>, not by a count.
         /// </summary>
@@ -62,19 +62,19 @@ namespace Bayeux.Client.Extensible.Core
         /// Decides whether an error is worth another attempt. <see cref="IsRetriable"/> by default.
         /// </summary>
         /// <remarks>
-        /// Runs on the polling loop for every failure, so it should be quick. A predicate that
-        /// throws counts as <c>false</c>, and the exception is logged. The poller's own stop never
+        /// Runs on the connect loop for every failure, so it should be quick. A predicate that
+        /// throws counts as <c>false</c>, and the exception is logged. The client's own stop never
         /// reaches it.
         /// </remarks>
         public Func<Exception, bool> ShouldRetry { get; }
 
         /// <summary>
-        /// Runs before every attempt the poller makes on its own - a connect retried in the same
+        /// Runs before every attempt the client makes on its own - a connect retried in the same
         /// session, or a new handshake after an error or when the server invalidated the session -
         /// typically to fetch fresh credentials. <c>null</c> by default.
         /// </summary>
         /// <remarks>
-        /// The token is cancelled when the poller stops. An exception counts as a failed attempt
+        /// The token is cancelled when the client stops. An exception counts as a failed attempt
         /// and goes through <see cref="ShouldRetry"/> like any other.
         /// </remarks>
         public Func<CancellationToken, Task>? BeforeAttemptAsync { get; }

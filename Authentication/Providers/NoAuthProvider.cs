@@ -9,7 +9,7 @@ namespace Bayeux.Client.Extensible.Authentication
     /// </summary>
     /// <remarks>
     /// Use this for servers that need no authentication at all, and for deployments where the
-    /// session is established outside the poller &#8212; for example when a cookie obtained by an
+    /// session is established outside the client &#8212; for example when a cookie obtained by an
     /// earlier login is carried by the shared <see cref="System.Net.CookieContainer"/>, or when a
     /// reverse proxy authenticates the request before the CometD server ever sees it.
     /// </remarks>
@@ -17,7 +17,7 @@ namespace Bayeux.Client.Extensible.Authentication
     {
         /// <summary>
         /// A shared instance. The provider holds no state, so a single instance can serve any
-        /// number of pollers.
+        /// number of clients.
         /// </summary>
         public static NoAuthProvider Instance { get; } = new NoAuthProvider();
 

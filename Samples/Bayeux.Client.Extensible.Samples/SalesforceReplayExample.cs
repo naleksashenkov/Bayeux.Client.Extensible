@@ -44,7 +44,7 @@ public static class SalesforceReplayExample
         // IAuthProvider. The extension handles the message level; neither knows about the other.
         var auth = new BearerTokenAuthProvider(await getAccessToken(CancellationToken.None));
 
-        // A lost session is re-established by the poller itself. Before each attempt: save the
+        // A lost session is re-established by the client itself. Before each attempt: save the
         // positions - if this process dies from here on, the next run still resumes from the last
         // event it saw - and fetch a fresh token, in case the old one is the cause. The same
         // extension then resubscribes from the last id it recorded, so nothing published while we
@@ -60,18 +60,18 @@ public static class SalesforceReplayExample
                 auth.UpdateCredentials(await getAccessToken(ct));
             });
 
-        var stopped = new TaskCompletionSource<OnPollerDisconnectedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource<BayeuxDisconnectedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http,
             // The API version is part of the path. Durable streaming needs 37.0 or later; ids in the
             // /meta/connect reply need 68.0.
-            new PollerOptions(channels, "cometd/68.0", extensions: [replay], reconnectOptions: reconnect),
+            new BayeuxClientOptions(channels, "cometd/68.0", extensions: [replay], reconnectOptions: reconnect),
             auth,
-            // Raised only when the poller gives up, the server tells it to stop, or we stop it.
-            onPollerDisconnected: (_, e) => stopped.TrySetResult(e));
+            // Raised only when the client gives up, the server tells it to stop, or we stop it.
+            onDisconnected: (_, e) => stopped.TrySetResult(e));
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
         Console.WriteLine($"Replay agreed by the server: {replay.IsSupported}");
 
         if (await Task.WhenAny(stopped.Task, Task.Delay(runFor)) == stopped.Task)
@@ -81,7 +81,7 @@ public static class SalesforceReplayExample
         }
         else
         {
-            await poller.DisconnectAsync();                // time is up, still connected
+            await client.DisconnectAsync();                // time is up, still connected
         }
 
         SaveReplayIds(replayIdsFile, replay.GetReplayIds());

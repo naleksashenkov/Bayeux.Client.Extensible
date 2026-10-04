@@ -78,15 +78,15 @@ public static class CustomAuthExample
 
         var auth = new BearerTokenAuthProvider(await getToken(CancellationToken.None));
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http,
-            new PollerOptions(channels, "cometd"),
+            new BayeuxClientOptions(channels, "cometd"),
             auth,
-            onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
+            onDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
-        // The poller does not refresh anything on its own. Rotate the token on your own schedule;
+        // The client does not refresh anything on its own. Rotate the token on your own schedule;
         // the next request picks it up with no reconnect and no gap in delivery.
         using var refreshing = new CancellationTokenSource();
 

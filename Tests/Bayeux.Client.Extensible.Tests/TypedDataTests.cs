@@ -11,11 +11,11 @@ using Xunit;
 namespace Bayeux.Client.Extensible.Tests;
 
 /// <summary>
-/// Application data as typed objects: <see cref="PollerOptions.JsonSerializerOptions"/>,
+/// Application data as typed objects: <see cref="BayeuxClientOptions.JsonSerializerOptions"/>,
 /// <see cref="BayeuxEvent.GetData{T}"/> and <see cref="BayeuxHandler.Of{T}"/>.
 /// </summary>
-/// <remarks>Part of <see cref="CometDPollerTests"/> to share its helpers.</remarks>
-public partial class CometDPollerTests
+/// <remarks>Part of <see cref="BayeuxClientTests"/> to share its helpers.</remarks>
+public partial class BayeuxClientTests
 {
     // A class rather than a record: a positional record needs init accessors, which net472 lacks.
     public sealed class Order
@@ -25,7 +25,7 @@ public partial class CometDPollerTests
         public decimal Total { get; set; }
     }
 
-    private static PollerOptions TypedOptions(
+    private static BayeuxClientOptions TypedOptions(
         string channel, ConcurrentQueue<Order> received, JsonSerializerOptions? serializerOptions = null) =>
         new(
             new Dictionary<string, BayeuxEventHandler>
@@ -42,10 +42,10 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = Options("/topic/unrelated");
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
-        await poller.PublishAsync("/orders/new", new Order { OrderId = 7, Total = 9.5m });
+        await client.PublishAsync("/orders/new", new Order { OrderId = 7, Total = 9.5m });
 
         // What a server written in JavaScript expects, not the declared PascalCase.
         var data = LastPublishRequest(server).GetProperty("data");
@@ -61,8 +61,8 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var received = new ConcurrentQueue<Order>();
 
-        await using var poller = new CometDPoller(http, TypedOptions("/orders/new", received), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, TypedOptions("/orders/new", received), NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.Publish("/orders/new", new { orderId = 3, total = 1.5 });
 
@@ -82,16 +82,16 @@ public partial class CometDPollerTests
 
         var snakeCase = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, TypedOptions("/orders/new", received, snakeCase), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
-        // Written with the poller's options...
-        await poller.PublishAsync("/orders/new", new Order { OrderId = 7, Total = 9.5m });
+        // Written with the client's options...
+        await client.PublishAsync("/orders/new", new Order { OrderId = 7, Total = 9.5m });
         Assert.Equal(7, LastPublishRequest(server).GetProperty("data").GetProperty("order_id").GetInt32());
 
         // ...and read with them: the server delivers the message back to its subscriber, and the
-        // handler can only fill OrderId if the poller passed the same options to the event.
+        // handler can only fill OrderId if the client passed the same options to the event.
         Assert.True(await WaitForAsync(() => received.Count == 1));
 
         var order = Assert.Single(received);
@@ -100,16 +100,16 @@ public partial class CometDPollerTests
     }
 
     [Fact]
-    public async Task Data_that_does_not_fit_is_reported_and_the_poller_carries_on()
+    public async Task Data_that_does_not_fit_is_reported_and_the_client_carries_on()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
         var received = new ConcurrentQueue<Order>();
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, TypedOptions("/orders/new", received), NoAuthProvider.Instance, (_, _) => { });
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, TypedOptions("/orders/new", received), NoAuthProvider.Instance, (_, _) => { });
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         server.Publish("/orders/new", new { orderId = "seven" });
 
@@ -123,9 +123,9 @@ public partial class CometDPollerTests
     }
 
     [Fact]
-    public async Task An_event_built_in_a_test_reads_like_one_from_the_poller()
+    public async Task An_event_built_in_a_test_reads_like_one_from_the_client()
     {
-        // The handler's own unit test: no poller, no options - the defaults the poller would use.
+        // The handler's own unit test: no client, no options - the defaults the client would use.
         var @event = new BayeuxEvent("/orders/new", Json("""{"orderId":1,"total":2.5}"""), ext: null);
 
         var direct = @event.GetData<Order>()!;

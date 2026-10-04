@@ -7,8 +7,58 @@ using System.Text.Json.Serialization;
 
 namespace Bayeux.Client.Extensible.Core
 {
-    /// <summary>What the polling loop should do after processing one <c>/meta/connect</c> response.</summary>
-    public enum ConnectResult
+    /// <summary>How Bayeux messages travel between the client and the server.</summary>
+    public enum BayeuxTransportType
+    {
+        /// <summary>
+        /// HTTP long-polling: a POST per batch, the server holding <c>/meta/connect</c> open until it
+        /// has something to send. Works through every proxy, and the only transport Salesforce offers.
+        /// </summary>
+        LongPolling,
+
+        /// <summary>
+        /// One WebSocket for the session: lower latency and overhead, but needs a server and every
+        /// proxy on the way to allow it.
+        /// </summary>
+        WebSocket
+    }
+
+    /// <summary>Where a client is in its life. Reported by <c>State</c> and <c>OnStateChanged</c>.</summary>
+    /// <remarks>
+    /// <code>
+    /// Disconnected → Connecting → Connected ⇄ Reconnecting
+    ///      ↑______________|___________|____________|      (any of them, when the client stops)
+    /// </code>
+    /// A health check can map them directly: Connected is healthy, Reconnecting degraded,
+    /// Disconnected and Connecting not yet or no longer.
+    /// </remarks>
+    public enum BayeuxClientState
+    {
+        /// <summary>
+        /// No session, and no attempt to get one: before <c>ConnectAsync</c>, and after the client
+        /// stops - by request, by the server, or because an error was not retried.
+        /// </summary>
+        Disconnected,
+
+        /// <summary>
+        /// <c>ConnectAsync</c> is handshaking and subscribing, or has finished and the first
+        /// <c>/meta/connect</c> has not been answered yet.
+        /// </summary>
+        Connecting,
+
+        /// <summary>A <c>/meta/connect</c> has succeeded: the session is established and polling.</summary>
+        Connected,
+
+        /// <summary>
+        /// The session was interrupted - a transport failure, a refusal, or the server asking for a
+        /// new handshake - and the client is getting it back on its own. Back to Connected after the
+        /// next successful <c>/meta/connect</c>.
+        /// </summary>
+        Reconnecting
+    }
+
+    /// <summary>What the connect loop should do after processing one <c>/meta/connect</c> response.</summary>
+    internal enum ConnectResult
     {
         /// <summary>Keep polling with the current session.</summary>
         Continue,
@@ -25,7 +75,7 @@ namespace Bayeux.Client.Extensible.Core
         Stop
     }
 
-    /// <summary>Why the polling loop ended.</summary>
+    /// <summary>Why the connect loop ended.</summary>
     public enum DisconnectReason
     {
         /// <summary>
@@ -44,23 +94,23 @@ namespace Bayeux.Client.Extensible.Core
 
         /// <summary>
         /// An error ended the loop. The cause is carried by
-        /// <see cref="OnPollerDisconnectedEventArgs.Error"/>.
+        /// <see cref="BayeuxDisconnectedEventArgs.Error"/>.
         /// </summary>
         Failed
     }
 
-    /// <summary>Which operation produced an error reported through the poller's error event.</summary>
+    /// <summary>Which operation produced an error reported through the client's error event.</summary>
     public enum ErrorSource
     {
         /// <summary>The HTTP request itself failed &#8212; transport, DNS, TLS or a non-success status.</summary>
         Http,
 
         /// <summary>
-        /// The poller is misconfigured; the fix is in the caller's code rather than on the wire.
+        /// The client is misconfigured; the fix is in the caller's code rather than on the wire.
         /// </summary>
         Configuration,
 
-        /// <summary>The <c>/meta/disconnect</c> exchange failed. Never fatal &#8212; the poller is already stopping.</summary>
+        /// <summary>The <c>/meta/disconnect</c> exchange failed. Never fatal &#8212; the client is already stopping.</summary>
         Disconnect,
 
         /// <summary>Raised for a <c>/meta/connect</c> condition, such as the server reporting multiple clients.</summary>
@@ -77,19 +127,19 @@ namespace Bayeux.Client.Extensible.Core
 
         /// <summary>
         /// A consumer's own message handler threw. Never fatal &#8212; the exception is swallowed so
-        /// that a bug in a handler cannot stop the poller.
+        /// that a bug in a handler cannot stop the client.
         /// </summary>
         Handler,
 
         /// <summary>
         /// An extension threw while processing a message. 
-        /// Never fatal &#8212; the exception is swallowed so that a bug in an extension cannot stop the poller.
+        /// Never fatal &#8212; the exception is swallowed so that a bug in an extension cannot stop the client.
         /// </summary>
         Ext
     }
 
     /// <summary>Fields shared by every outgoing Bayeux message.</summary>
-    public abstract class BaseLongPollingRequestModel
+    public abstract class BayeuxRequestModel
     {
         /// <summary>
         /// The session id issued by the handshake. Omitted from the serialized message when
@@ -118,13 +168,13 @@ namespace Bayeux.Client.Extensible.Core
         /// which a server accepts only by the accident of mapping everything below its path.
         /// </remarks>
         [JsonIgnore]
-        public string? Endpoint => Channel.StartsWith(CometDConstants.MetaChannels.Meta, StringComparison.Ordinal) 
+        public string? Endpoint => Channel.StartsWith(BayeuxConstants.MetaChannels.Meta, StringComparison.Ordinal) 
             ? Channel.Substring(Channel.LastIndexOf('/') + 1)
             : null;
 
         /// <summary>
         /// Extension data for this message: the protocol's own extension point, keyed by extension name
-        /// (for example <c>replay</c> or <c>ack</c>). Omitted from the wire when <c>null</c>, so a poller
+        /// (for example <c>replay</c> or <c>ack</c>). Omitted from the wire when <c>null</c>, so a client
         /// with no extensions sends exactly what it sent before this field existed.
         /// </summary>
         [JsonPropertyName("ext")]
@@ -135,7 +185,7 @@ namespace Bayeux.Client.Extensible.Core
         /// <param name="clientId">The session id, or <c>null</c> for a handshake.</param>
         /// <param name="channel">The meta channel being addressed.</param>
         /// <param name="requestId">Client-generated message id.</param>
-        public BaseLongPollingRequestModel(string? clientId, string channel, string requestId)
+        public BayeuxRequestModel(string? clientId, string channel, string requestId)
         {
             ClientId = clientId;
             Channel = channel;
@@ -155,10 +205,10 @@ namespace Bayeux.Client.Extensible.Core
         /// <exception cref="ArgumentNullException"><paramref name="messages"/> is <c>null</c>.</exception>
         /// <remarks>
         /// The copy into an <see cref="object"/> array is required: given the declared element type
-        /// System.Text.Json serializes each message as a <see cref="BaseLongPollingRequestModel"/>
+        /// System.Text.Json serializes each message as a <see cref="BayeuxRequestModel"/>
         /// and silently drops every property declared on the derived message.
         /// </remarks>
-        public static string FormLongPollingRequestJson(IReadOnlyList<BaseLongPollingRequestModel> messages)
+        public static string FormLongPollingRequestJson(IReadOnlyList<BayeuxRequestModel> messages)
         {
             if (messages is null)
                 throw new ArgumentNullException(nameof(messages));
@@ -173,7 +223,7 @@ namespace Bayeux.Client.Extensible.Core
     }
 
     /// <summary>A <c>/meta/handshake</c> request, which negotiates the protocol and obtains a client id.</summary>
-    public class HandshakeRequestModel : BaseLongPollingRequestModel
+    public class HandshakeRequestModel : BayeuxRequestModel
     {
         /// <summary>Bayeux protocol version offered by this client.</summary>
         [JsonPropertyName("version")]
@@ -183,19 +233,19 @@ namespace Bayeux.Client.Extensible.Core
         [JsonPropertyName("minimumVersion")]
         public string MinimumVersion { get; set; } = "1.0";
 
-        /// <summary>Transports this client can use. Only long-polling is implemented.</summary>
+        /// <summary>The transport this client offers: the one it was configured with.</summary>
         [JsonPropertyName("supportedConnectionTypes")]
-        public string[] SupportedConnectionTypes { get; set; } = ["long-polling"];
+        public string[] SupportedConnectionTypes { get; set; }
 
         /// <summary>Creates a handshake request.</summary>
         /// <param name="requestId">Client-generated message id.</param>
-        public HandshakeRequestModel(string requestId) :
-        base(null, CometDConstants.MetaChannels.Handshake, requestId)
-        { }
+        /// <param name="connectionType">The protocol's name for the transport, such as <c>long-polling</c>.</param>
+        public HandshakeRequestModel(string requestId, string connectionType)
+        : base(null, BayeuxConstants.MetaChannels.Handshake, requestId) => SupportedConnectionTypes = [connectionType];
     }
 
     /// <summary>A <c>/meta/subscribe</c> request for one channel.</summary>
-    public class SubscribeRequestModel : BaseLongPollingRequestModel
+    public class SubscribeRequestModel : BayeuxRequestModel
     {
         /// <summary>The channel being subscribed to.</summary>
         [JsonPropertyName("subscription")]
@@ -205,12 +255,12 @@ namespace Bayeux.Client.Extensible.Core
         /// <param name="clientId">The session id from the handshake.</param>
         /// <param name="subscription">The channel to subscribe to.</param>
         /// <param name="requestId">Client-generated message id.</param>
-        public SubscribeRequestModel(string? clientId, string subscription, string requestId) :
-        base(clientId, CometDConstants.MetaChannels.Subscribe, requestId) => Subscription = subscription;
+        public SubscribeRequestModel(string? clientId, string subscription, string requestId)
+        : base(clientId, BayeuxConstants.MetaChannels.Subscribe, requestId) => Subscription = subscription;
     }
 
     /// <summary>A <c>/meta/unsubscribe</c> request for one channel.</summary>
-    public class UnsubscribeRequestModel : BaseLongPollingRequestModel
+    public class UnsubscribeRequestModel : BayeuxRequestModel
     {
         /// <summary>The channel being unsubscribed from.</summary>
         [JsonPropertyName("subscription")]
@@ -220,36 +270,36 @@ namespace Bayeux.Client.Extensible.Core
         /// <param name="clientId">The session id from the handshake.</param>
         /// <param name="subscription">The channel to unsubscribe from.</param>
         /// <param name="requestId">Client-generated message id.</param>
-        public UnsubscribeRequestModel(string? clientId, string subscription, string requestId) :
-        base(clientId, CometDConstants.MetaChannels.Unsubscribe, requestId) => Subscription = subscription;
+        public UnsubscribeRequestModel(string? clientId, string subscription, string requestId)
+        : base(clientId, BayeuxConstants.MetaChannels.Unsubscribe, requestId) => Subscription = subscription;
     }
 
     /// <summary>
     /// A <c>/meta/connect</c> request. The server holds this open until it has messages or its
     /// timeout elapses &#8212; this is the long poll.
     /// </summary>
-    public class ConnectRequestModel : BaseLongPollingRequestModel
+    public class ConnectRequestModel : BayeuxRequestModel
     {
         /// <summary>The transport in use for this session.</summary>
         [JsonPropertyName("connectionType")]
-        public string ConnectionType { get; set; } = "long-polling";
+        public string ConnectionType { get; set; }
 
         /// <summary>Creates a connect request.</summary>
         /// <param name="clientId">The session id from the handshake.</param>
         /// <param name="requestId">Client-generated message id.</param>
-        public ConnectRequestModel(string clientId, string requestId) :
-        base(clientId, CometDConstants.MetaChannels.Connect, requestId)
-        { }
+        /// <param name="connectionType">The protocol's name for the transport in use, such as <c>long-polling</c>.</param>
+        public ConnectRequestModel(string clientId, string requestId, string connectionType)
+        : base(clientId, BayeuxConstants.MetaChannels.Connect, requestId) => ConnectionType = connectionType;
     }
 
     /// <summary>A <c>/meta/disconnect</c> request, releasing the session on the server.</summary>
-    public class DisconnectRequestModel : BaseLongPollingRequestModel
+    public class DisconnectRequestModel : BayeuxRequestModel
     {
         /// <summary>Creates a disconnect request.</summary>
         /// <param name="clientId">The session id to release.</param>
         /// <param name="requestId">Client-generated message id.</param>
-        public DisconnectRequestModel(string clientId, string requestId) :
-        base(clientId, CometDConstants.MetaChannels.Disconnect, requestId)
+        public DisconnectRequestModel(string clientId, string requestId)
+        : base(clientId, BayeuxConstants.MetaChannels.Disconnect, requestId)
         { }
     }
 
@@ -292,6 +342,13 @@ namespace Bayeux.Client.Extensible.Core
         /// <summary>The channel a subscribe or unsubscribe reply refers to.</summary>
         [JsonPropertyName("subscription")]
         public string? Subscription { get; set; }
+
+        /// <summary>
+        /// In a handshake reply, the transports the server offers. Checked against the client's own
+        /// before anything else is sent.
+        /// </summary>
+        [JsonPropertyName("supportedConnectionTypes")]
+        public string?[]? SupportedConnectionTypes { get; set; }
 
         /// <summary>The application payload of an event message.</summary>
         [JsonPropertyName("data")]
@@ -337,18 +394,18 @@ namespace Bayeux.Client.Extensible.Core
         /// <summary>
         /// Set by CometD when several sessions share one <c>BAYEUX_BROWSER</c> cookie. Only one of
         /// them keeps a real long poll; the rest are demoted to interval polling. In this library
-        /// it means cookie state is being shared between pollers that should be independent.
+        /// it means cookie state is being shared between clients that should be independent.
         /// </summary>
         [JsonPropertyName("multiple-clients")]
         public bool? IsMultipleClients { get; set; }
     }
 
     /// <summary>A message published to an application channel.</summary>
-    public class PublishRequestModel : BaseLongPollingRequestModel
+    public class PublishRequestModel : BayeuxRequestModel
     {
         /// <summary>
         /// The payload. <c>PublishAsync</c> passes it already serialized - a <see cref="JsonElement"/>
-        /// written with the poller's <c>JsonSerializerOptions</c> - so the protocol's own fields
+        /// written with the client's <c>JsonSerializerOptions</c> - so the protocol's own fields
         /// and the application's data each follow their own naming rules.
         /// </summary>
         [JsonPropertyName("data")]

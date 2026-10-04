@@ -12,7 +12,7 @@ using Xunit;
 namespace Bayeux.Client.Extensible.IntegrationTests;
 
 /// <summary>
-/// Runs the poller against the CometD reference implementation, which the fake server in the unit
+/// Runs the client against the CometD reference implementation, which the fake server in the unit
 /// tests can only imitate. Skipped unless <c>BAYEUX_COMETD_URL</c> points at a running instance;
 /// see <c>tests/cometd-server</c> for how to start one.
 /// </summary>
@@ -35,12 +35,12 @@ public class RealCometDTests
         await control.GetStringAsync("control/" + action);
     }
 
-    private static (PollerOptions options, ConcurrentQueue<JsonElement> received) Options(string channel)
+    private static (BayeuxClientOptions options, ConcurrentQueue<JsonElement> received) Options(string channel)
     {
         var received = new ConcurrentQueue<JsonElement>();
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels[channel] = (e, _) => { received.Enqueue(e.Data); return Task.CompletedTask; };
-        return (new PollerOptions(channels, "cometd"), received);
+        return (new BayeuxClientOptions(channels, "cometd"), received);
     }
 
     private static async Task<bool> WaitForAsync(Func<bool> condition, int timeoutMs = 15000)
@@ -64,14 +64,14 @@ public class RealCometDTests
         using var http = CreateClient();
         var (options, received) = Options("/topic/real");
 
-        OnPollerDisconnectedEventArgs? disconnected = null;
+        BayeuxDisconnectedEventArgs? disconnected = null;
         var done = new TaskCompletionSource();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance,
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance,
             (_, e) => { disconnected = e; done.TrySetResult(); });
 
-        await poller.ConnectAsync();
-        Assert.False(string.IsNullOrEmpty(poller.ClientId));
+        await client.ConnectAsync();
+        Assert.False(string.IsNullOrEmpty(client.ClientId));
 
         await Task.Delay(500);
         await ControlAsync("publish?channel=/topic/real&text=from-cometd");
@@ -80,7 +80,7 @@ public class RealCometDTests
         Assert.True(received.TryPeek(out var payload));
         Assert.Equal("from-cometd", payload.GetProperty("text").GetString());
 
-        await poller.DisconnectAsync();
+        await client.DisconnectAsync();
         await done.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
         Assert.Equal(DisconnectReason.TokenCancellation, disconnected!.Reason);
@@ -88,21 +88,21 @@ public class RealCometDTests
     }
 
     [SkippableFact]
-    public async Task Server_initiated_disconnect_stops_the_poller()
+    public async Task Server_initiated_disconnect_stops_the_client()
     {
         Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
 
         using var http = CreateClient();
         var (options, _) = Options("/topic/kill");
 
-        OnPollerDisconnectedEventArgs? disconnected = null;
+        BayeuxDisconnectedEventArgs? disconnected = null;
         var done = new TaskCompletionSource();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance,
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance,
             (_, e) => { disconnected = e; done.TrySetResult(); });
 
-        await poller.ConnectAsync();
-        await ControlAsync("kill?clientId=" + poller.ClientId);
+        await client.ConnectAsync();
+        await ControlAsync("kill?clientId=" + client.ClientId);
 
         await done.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
@@ -123,10 +123,10 @@ public class RealCometDTests
 
         var (first, _) = Options("/topic/share1");
         var (second, _) = Options("/topic/share2");
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var p1 = new CometDPoller(http, first, NoAuthProvider.Instance, (_, _) => { }, shared);
-        await using var p2 = new CometDPoller(http, second, NoAuthProvider.Instance, (_, _) => { }, shared);
+        await using var p1 = new BayeuxClient(http, first, NoAuthProvider.Instance, (_, _) => { }, shared);
+        await using var p2 = new BayeuxClient(http, second, NoAuthProvider.Instance, (_, _) => { }, shared);
 
         p1.OnError += (_, e) => errors.Enqueue(e);
         p2.OnError += (_, e) => errors.Enqueue(e);
@@ -147,10 +147,10 @@ public class RealCometDTests
 
         var (first, r1) = Options("/topic/iso1");
         var (second, r2) = Options("/topic/iso2");
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var p1 = new CometDPoller(http, first, NoAuthProvider.Instance, (_, _) => { });
-        await using var p2 = new CometDPoller(http, second, NoAuthProvider.Instance, (_, _) => { });
+        await using var p1 = new BayeuxClient(http, first, NoAuthProvider.Instance, (_, _) => { });
+        await using var p2 = new BayeuxClient(http, second, NoAuthProvider.Instance, (_, _) => { });
 
         p1.OnError += (_, e) => errors.Enqueue(e);
         p2.OnError += (_, e) => errors.Enqueue(e);
@@ -178,12 +178,12 @@ public class RealCometDTests
         var a = new ConcurrentQueue<JsonElement>();
         var b = new ConcurrentQueue<JsonElement>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         // The whole point of the batch: several messages in one array, which a real server must
         // answer one reply per message. A stub can be written to agree with the client; this cannot.
-        await poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+        await client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
         {
             ["/topic/batch-a"] = (e, _) => { a.Enqueue(e.Data); return Task.CompletedTask; },
             ["/topic/batch-b"] = (e, _) => { b.Enqueue(e.Data); return Task.CompletedTask; }
@@ -195,10 +195,10 @@ public class RealCometDTests
 
         Assert.True(await WaitForAsync(() => a.Count >= 1 && b.Count >= 1));
 
-        await poller.UnsubscribeChannelsAsync(["/topic/batch-a", "/topic/batch-b"]);
+        await client.UnsubscribeChannelsAsync(["/topic/batch-a", "/topic/batch-b"]);
 
-        Assert.DoesNotContain("/topic/batch-a", poller.Channels.Keys);
-        Assert.DoesNotContain("/topic/batch-b", poller.Channels.Keys);
+        Assert.DoesNotContain("/topic/batch-a", client.Channels.Keys);
+        Assert.DoesNotContain("/topic/batch-b", client.Channels.Keys);
 
         var seen = a.Count + b.Count;
 
@@ -221,13 +221,13 @@ public class RealCometDTests
         var received = new ConcurrentQueue<JsonElement>();
         var ack = new BayeuxAckExtension();
 
-        var options = new PollerOptions(
+        var options = new BayeuxClientOptions(
             new Dictionary<string, BayeuxEventHandler> { ["/topic/acked"] = (e, _) => { received.Enqueue(e.Data); return Task.CompletedTask; } },
             "cometd",
             extensions: [ack]);
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         Assert.True(ack.IsAckSupported);
 
@@ -244,7 +244,7 @@ public class RealCometDTests
     }
 
     [SkippableFact]
-    public async Task A_message_published_by_one_poller_reaches_another_and_its_publisher()
+    public async Task A_message_published_by_one_client_reaches_another_and_its_publisher()
     {
         Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
 
@@ -255,8 +255,8 @@ public class RealCometDTests
         var (subscriberOptions, subscriberReceived) = Options("/chat/real");
         var (publisherOptions, publisherReceived) = Options("/chat/real");
 
-        await using var subscriber = new CometDPoller(http, subscriberOptions, NoAuthProvider.Instance, (_, _) => { });
-        await using var publisher = new CometDPoller(http, publisherOptions, NoAuthProvider.Instance, (_, _) => { });
+        await using var subscriber = new BayeuxClient(http, subscriberOptions, NoAuthProvider.Instance, (_, _) => { });
+        await using var publisher = new BayeuxClient(http, publisherOptions, NoAuthProvider.Instance, (_, _) => { });
         await subscriber.ConnectAsync();
         await publisher.ConnectAsync();
 

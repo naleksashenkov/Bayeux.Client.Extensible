@@ -29,7 +29,7 @@ public static class ChannelsExample
         // one this event came on; a pattern subscription has no other way to tell them apart.
         //
         // Handlers are asynchronous and awaited: the next event waits until this one is written.
-        // The token is cancelled when the poller stops, so a write in progress does not hold up
+        // The token is cancelled when the client stops, so a write in progress does not hold up
         // DisconnectAsync.
         channels["/topic/*"] = async (e, cancellationToken) =>
             await File.AppendAllTextAsync("topic.log", $"{e.Channel}: {e.Data}{Environment.NewLine}", cancellationToken);
@@ -42,18 +42,18 @@ public static class ChannelsExample
             return Task.CompletedTask;
         };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http,
-            new PollerOptions(channels, "cometd"),
+            new BayeuxClientOptions(channels, "cometd"),
             NoAuthProvider.Instance,
-            onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
+            onDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
-        // Added while the poller runs. The whole set goes out as one Bayeux message, so this is a
+        // Added while the client runs. The whole set goes out as one Bayeux message, so this is a
         // single round trip. Both are re-subscribed automatically after later handshakes, so they
         // survive a dropped session.
-        await poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+        await client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
         {
             ["/topic/audit"] = (e, _) => { Console.WriteLine($"audit: {e.Data}"); return Task.CompletedTask; },
             ["/topic/billing"] = (e, _) => { Console.WriteLine($"billing: {e.Data}"); return Task.CompletedTask; }
@@ -63,7 +63,7 @@ public static class ChannelsExample
 
         // Unsubscribe by the same text used to subscribe. Removing "/topic/*" would not remove a
         // separately registered "/topic/audit", and vice versa.
-        await poller.UnsubscribeChannelsAsync(["/topic/audit", "/topic/billing"]);
+        await client.UnsubscribeChannelsAsync(["/topic/audit", "/topic/billing"]);
 
         await Task.Delay(TimeSpan.FromSeconds(30));
     }
@@ -71,13 +71,13 @@ public static class ChannelsExample
     /// <summary>
     /// Publishing, and the three outcomes worth handling differently.
     /// </summary>
-    public static async Task RunPublishAsync(CometDPoller poller, CancellationToken cancellationToken)
+    public static async Task RunPublishAsync(BayeuxClient client, CancellationToken cancellationToken)
     {
         try
         {
-            // Names go out in camelCase by default - PollerOptions.JsonSerializerOptions - which is
+            // Names go out in camelCase by default - BayeuxClientOptions.JsonSerializerOptions - which is
             // what a server written in JavaScript expects. A class with OrderId would send orderId.
-            await poller.PublishAsync("/chat/room1", new { text = "hello", sentAt = DateTime.UtcNow }, cancellationToken);
+            await client.PublishAsync("/chat/room1", new { text = "hello", sentAt = DateTime.UtcNow }, cancellationToken);
         }
         catch (BayeuxPublishException ex)
         {
@@ -87,7 +87,7 @@ public static class ChannelsExample
         }
         catch (HttpRequestException ex)
         {
-            // No answer, or an HTTP error: unknown whether the server delivered it. The poller never
+            // No answer, or an HTTP error: unknown whether the server delivered it. The client never
             // retries a publish, because repeating one can deliver it twice; decide here.
             Console.WriteLine($"not confirmed: {ex.Message}");
         }
@@ -100,11 +100,11 @@ public static class ChannelsExample
     /// <summary>
     /// The two ways a batch can fail, and why they are worth telling apart.
     /// </summary>
-    public static async Task RunPartialFailureAsync(CometDPoller poller)
+    public static async Task RunPartialFailureAsync(BayeuxClient client)
     {
         try
         {
-            await poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
+            await client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler>
             {
                 ["/topic/public"] = (e, _) => { Console.WriteLine($"public: {e.Data}"); return Task.CompletedTask; },
                 ["/topic/restricted"] = (e, _) => { Console.WriteLine($"restricted: {e.Data}"); return Task.CompletedTask; }
@@ -113,7 +113,7 @@ public static class ChannelsExample
         catch (BayeuxSubscriptionException ex)
         {
             // The server answered. Everything in Succeeded is subscribed and delivering; everything
-            // in Failures was rejected and has been rolled back, so poller.Channels still matches
+            // in Failures was rejected and has been rolled back, so client.Channels still matches
             // what the server believes. Retrying only the failed channels is safe.
             Console.WriteLine($"subscribed: {string.Join(", ", ex.Succeeded)}");
 
@@ -146,13 +146,13 @@ public static class ChannelsExample
         channels["/topic/**"] = (e, _) => { Console.WriteLine($"audit log, {e.Channel}: {e.Data}"); return Task.CompletedTask; };
         channels["/topic/orders"] = (e, _) => { Console.WriteLine($"order processing: {e.Data}"); return Task.CompletedTask; };
 
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http,
-            new PollerOptions(channels, "cometd"),
+            new BayeuxClientOptions(channels, "cometd"),
             NoAuthProvider.Instance,
-            onPollerDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
+            onDisconnected: (_, e) => Console.WriteLine($"stopped: {e.Reason}"));
 
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
         await Task.Delay(TimeSpan.FromMinutes(1));
     }
 }

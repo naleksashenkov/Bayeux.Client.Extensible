@@ -12,7 +12,7 @@ using System.Text.Json.Nodes;
 namespace Bayeux.Client.Extensible.Tests;
 
 /// <summary>
-/// A minimal Bayeux server over <see cref="HttpListener"/>. Lets a test drive the real poller
+/// A minimal Bayeux server over <see cref="HttpListener"/>. Lets a test drive the real client
 /// over real HTTP and script protocol conditions that a live server will not produce on demand.
 /// </summary>
 public sealed class FakeBayeuxServer : IDisposable
@@ -219,7 +219,7 @@ public sealed class FakeBayeuxServer : IDisposable
             return _scriptedConnects.Count > 0 ? _scriptedConnects.Dequeue() : null;
     }
 
-    // Read and decrement in one step: the poller can send the next request before a test thread
+    // Read and decrement in one step: the client can send the next request before a test thread
     // would otherwise see the count go down.
     private bool TakeConnectFailure(out int status)
     {
@@ -437,7 +437,7 @@ public sealed class FakeBayeuxServer : IDisposable
             return RequestBodies.First(b => b.StartsWith("/cometd/" + endpoint, StringComparison.Ordinal));
     }
 
-    // The poller keeps recording while a test reads, so every observation is a snapshot.
+    // The client keeps recording while a test reads, so every observation is a snapshot.
     public string?[] AuthHeadersSnapshot { get { lock (_sync) return AuthHeaders.ToArray(); } }
 
     public string?[] CookieHeadersSnapshot { get { lock (_sync) return CookieHeaders.ToArray(); } }

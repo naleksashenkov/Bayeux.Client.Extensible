@@ -13,14 +13,14 @@ using Xunit;
 namespace Bayeux.Client.Extensible.Tests;
 
 /// <summary>
-/// Reconnection after an error: <see cref="ReconnectOptions"/> on its own, and the poller using it.
+/// Reconnection after an error: <see cref="ReconnectOptions"/> on its own, and the client using it.
 /// </summary>
 /// <remarks>
-/// Part of <see cref="CometDPollerTests"/> to share its helpers. A held <c>/meta/connect</c> on the
+/// Part of <see cref="BayeuxClientTests"/> to share its helpers. A held <c>/meta/connect</c> on the
 /// fake server returns within about a second, so a failure scripted after <c>ConnectAsync</c> is
 /// met by the next poll without anything else to trigger it.
 /// </remarks>
-public partial class CometDPollerTests
+public partial class BayeuxClientTests
 {
     // Short enough to keep the suite fast, long enough to be a real wait.
     private static ReconnectOptions QuickReconnect(
@@ -30,33 +30,33 @@ public partial class CometDPollerTests
         new(TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(20),
             maxAttempts: maxAttempts, shouldRetry: shouldRetry, beforeAttemptAsync: beforeAttemptAsync);
 
-    private static (PollerOptions options, ConcurrentQueue<JsonElement> received) ReconnectingOptions(
+    private static (BayeuxClientOptions options, ConcurrentQueue<JsonElement> received) ReconnectingOptions(
         string channel, ReconnectOptions? reconnect)
     {
         var received = new ConcurrentQueue<JsonElement>();
         var channels = new Dictionary<string, BayeuxEventHandler> { [channel] = On(data => received.Enqueue(data)) };
 
-        return (new PollerOptions(channels, "cometd", reconnectOptions: reconnect), received);
+        return (new BayeuxClientOptions(channels, "cometd", reconnectOptions: reconnect), received);
     }
 
-    private static TaskCompletionSource<OnPollerDisconnectedEventArgs> NewStopSignal() =>
+    private static TaskCompletionSource<BayeuxDisconnectedEventArgs> NewStopSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    // ---- the poller with and without a policy ------------------------------------------------
+    // ---- the client with and without a policy ------------------------------------------------
 
     [Fact]
-    public async Task Without_a_reconnect_policy_a_failed_connect_stops_the_poller_as_fatal()
+    public async Task Without_a_reconnect_policy_a_failed_connect_stops_the_client_as_fatal()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
         var (options, _) = ReconnectingOptions("/topic/r", reconnect: null);
 
         var stopped = NewStopSignal();
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         server.FailNextConnectsWithStatus = 1;
 
@@ -76,13 +76,13 @@ public partial class CometDPollerTests
         var (options, received) = ReconnectingOptions("/topic/r", QuickReconnect());
 
         var raised = false;
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
-        var firstClientId = poller.ClientId;
+        var firstClientId = client.ClientId;
         server.FailNextConnectsWithStatus = 1;
 
         Assert.True(await WaitForAsync(() => server.FailNextConnectsWithStatus == 0));
@@ -93,10 +93,10 @@ public partial class CometDPollerTests
         Assert.True(await WaitForAsync(() => received.Count == 1));
 
         Assert.Equal(1, server.HandshakeCount);
-        Assert.Equal(firstClientId, poller.ClientId);
+        Assert.Equal(firstClientId, client.ClientId);
         Assert.Single(server.SubscriptionsSnapshot, c => c == "/topic/r");
 
-        // Reported, but not as the end: the poller carried on, and no disconnect event came.
+        // Reported, but not as the end: the client carried on, and no disconnect event came.
         Assert.False(raised);
         Assert.Contains(errors, e => e.Source == ErrorSource.Http && !e.IsFatal);
         Assert.DoesNotContain(errors, e => e.IsFatal);
@@ -111,8 +111,8 @@ public partial class CometDPollerTests
 
         var stopped = NewStopSignal();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
+        await client.ConnectAsync();
 
         // Repeating a rejected login is how a service account gets locked.
         server.ConnectFailureStatus = 401;
@@ -146,8 +146,8 @@ public partial class CometDPollerTests
 
         var (options, _) = ReconnectingOptions("/topic/r", reconnect);
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.ConnectFailureStatus = 401;
         server.FailNextConnectsWithStatus = 1;
@@ -155,7 +155,7 @@ public partial class CometDPollerTests
         Assert.True(await WaitForAsync(() => !handshakesBeforeEachAttempt.IsEmpty));
         Assert.True(await WaitForAsync(() => server.FailNextConnectsWithStatus == 0));
 
-        // Retried rather than ending the poller - and in the same session, since an HTTP status is
+        // Retried rather than ending the client - and in the same session, since an HTTP status is
         // a transport failure. The hook still ran first: credentials can expire whether or not
         // the session survived. Once, and not before ConnectAsync's own handshake.
         Assert.Equal(new[] { 1 }, handshakesBeforeEachAttempt.ToArray());
@@ -178,8 +178,8 @@ public partial class CometDPollerTests
 
         var (options, _) = ReconnectingOptions("/topic/r", reconnect);
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         // The server invalidates the session: a new handshake, with fresh credentials first.
         server.FailNextConnectsWith402 = 1;
@@ -189,7 +189,7 @@ public partial class CometDPollerTests
     }
 
     [Fact]
-    public async Task Running_out_of_attempts_stops_the_poller_with_the_last_error()
+    public async Task Running_out_of_attempts_stops_the_client_with_the_last_error()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
@@ -197,11 +197,11 @@ public partial class CometDPollerTests
 
         var stopped = NewStopSignal();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
+        await client.ConnectAsync();
 
         // A refusal the default policy does retry, so only the count can end it. The 402 sends the
-        // poller to a new handshake: a transport failure would keep the session and never reach one.
+        // client to a new handshake: a transport failure would keep the session and never reach one.
         server.RejectedHandshakeReconnect = "handshake";
         server.RejectNextHandshakes = int.MaxValue;
         server.FailNextConnectsWith402 = 1;
@@ -225,8 +225,8 @@ public partial class CometDPollerTests
 
         var stopped = NewStopSignal();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
+        await client.ConnectAsync();
 
         // A server that accepts every handshake and fails every session soon after. A 402 proves
         // nothing about the new session, so it must not count as the success that resets the
@@ -234,7 +234,7 @@ public partial class CometDPollerTests
         //   500 -> attempt 1, same session;  402 -> new session, still 1;
         //   500 -> attempt 2, same session;  500 -> out of attempts.
         // Were the 402 to reset the count, the third failure would be attempt 1 again, the fourth
-        // attempt 2, and the poller would carry on on the unscripted connects that follow.
+        // attempt 2, and the client would carry on on the unscripted connects that follow.
         server.ScriptConnects(500, 402, 500, 500);
 
         var outcome = await WithTimeoutAsync(stopped.Task, TimeSpan.FromSeconds(10));
@@ -255,8 +255,8 @@ public partial class CometDPollerTests
 
         var stopped = NewStopSignal();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
+        await client.ConnectAsync();
 
         server.RejectNextHandshakes = 1;                 // with advice "none", the default
         server.FailNextConnectsWith402 = 1;              // the server drops the session: a new handshake
@@ -273,18 +273,18 @@ public partial class CometDPollerTests
     private const string SalesforceRevokedExt = """{"sfdc":{"failureReason":"401::Authentication invalid"}}""";
 
     [Fact]
-    public async Task A_refused_connect_stops_the_poller_with_the_servers_reason()
+    public async Task A_refused_connect_stops_the_client_with_the_servers_reason()
     {
         using var server = new FakeBayeuxServer();
         using var http = server.CreateClient();
         var (options, _) = ReconnectingOptions("/topic/r", reconnect: null);
 
         var stopped = NewStopSignal();
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        poller.OnError += (_, e) => errors.Enqueue(e);
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
 
         server.RefuseNextConnect("401::Authentication invalid", SalesforceRevokedExt);
 
@@ -304,7 +304,7 @@ public partial class CometDPollerTests
 
         // The server has already dropped the session: nothing is sent to close it.
         Assert.Equal(0, server.DisconnectCount);
-        Assert.Equal(string.Empty, poller.ClientId);
+        Assert.Equal(string.Empty, client.ClientId);
     }
 
     [Fact]
@@ -316,8 +316,8 @@ public partial class CometDPollerTests
 
         var stopped = NewStopSignal();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
+        await client.ConnectAsync();
 
         // Advice "none": the server says the same again is pointless, and the default agrees.
         server.RefuseNextConnect("401::Authentication invalid");
@@ -351,13 +351,13 @@ public partial class CometDPollerTests
         var (options, received) = ReconnectingOptions("/topic/r", reconnect);
         var raised = false;
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
+        await client.ConnectAsync();
 
         server.RefuseNextConnect("401::Authentication invalid", SalesforceRevokedExt);
 
         Assert.True(await WaitForAsync(() => server.HandshakeCount == 2));
-        Assert.True(await WaitForAsync(() => poller.ClientId.Length > 0));
+        Assert.True(await WaitForAsync(() => client.ClientId.Length > 0));
 
         server.Publish("/topic/r", new { n = 1 });
         Assert.True(await WaitForAsync(() => received.Count == 1));
@@ -373,14 +373,14 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, _) = ReconnectingOptions("/topic/r", reconnect: null);
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
 
         // Salesforce's handshake refusal says only "403::Handshake denied"; a revoked token, a
         // connection limit and a busy server look the same until ext is read.
         server.RejectNextHandshakes = 1;
         server.RejectedHandshakeExtJson = SalesforceRevokedExt;
 
-        var refused = await Assert.ThrowsAsync<BayeuxHandshakeException>(() => poller.ConnectAsync());
+        var refused = await Assert.ThrowsAsync<BayeuxHandshakeException>(() => client.ConnectAsync());
 
         Assert.Equal("403::Handshake denied", refused.Error);
         Assert.Equal("401::Authentication invalid", refused.Ext!["sfdc"].GetProperty("failureReason").GetString());
@@ -394,16 +394,16 @@ public partial class CometDPollerTests
         var (options, _) = ReconnectingOptions("/topic/r", QuickReconnect());
 
         var raised = false;
-        var errors = new ConcurrentQueue<OnPollerErrorEventArgs>();
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
-        poller.OnError += (_, e) => errors.Enqueue(e);
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => raised = true);
+        client.OnError += (_, e) => errors.Enqueue(e);
 
         // Retriable by the policy's rules, yet the caller hears about it at once.
         server.RejectedHandshakeReconnect = "handshake";
         server.RejectNextHandshakes = 1;
 
-        var refused = await Assert.ThrowsAsync<BayeuxHandshakeException>(() => poller.ConnectAsync());
+        var refused = await Assert.ThrowsAsync<BayeuxHandshakeException>(() => client.ConnectAsync());
 
         Assert.Equal("403::Handshake denied", refused.Error);
         Assert.Equal(1, server.HandshakeCount);
@@ -424,22 +424,22 @@ public partial class CometDPollerTests
 
         var stopped = NewStopSignal();
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
+        await client.ConnectAsync();
 
         // A refusal: the server has dropped the session.
         server.RefuseNextConnect("403::Forbidden");
 
         // The id is cleared just before the delay starts.
-        Assert.True(await WaitForAsync(() => poller.ClientId.Length == 0));
+        Assert.True(await WaitForAsync(() => client.ClientId.Length == 0));
 
         // No session to subscribe on while it is being re-established: an immediate, clear error
         // rather than a request with the id of the lost one.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => poller.SubscribeNewChannelsAsync(
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SubscribeNewChannelsAsync(
             new Dictionary<string, BayeuxEventHandler> { ["/topic/other"] = Ignore }));
 
         var watch = Stopwatch.StartNew();
-        await WithTimeoutAsync(poller.DisconnectAsync(), TimeSpan.FromSeconds(10));
+        await WithTimeoutAsync(client.DisconnectAsync(), TimeSpan.FromSeconds(10));
         watch.Stop();
 
         // Well below the seven-second disconnect timeout a request to a dead server could cost.
@@ -461,11 +461,11 @@ public partial class CometDPollerTests
         var stopped = NewStopSignal();
         var failed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        poller.OnError += (_, e) => { if (e.Source == ErrorSource.Http) failed.TrySetResult(true); };
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
+        client.OnError += (_, e) => { if (e.Source == ErrorSource.Http) failed.TrySetResult(true); };
+        await client.ConnectAsync();
 
-        var clientId = poller.ClientId;
+        var clientId = client.ClientId;
         server.FailNextConnectsWithStatus = 1;
 
         // Reported just before the delay starts.
@@ -473,10 +473,10 @@ public partial class CometDPollerTests
 
         // The session may well be alive - the server holds it until maxInterval - so it is kept,
         // and usable meanwhile.
-        Assert.Equal(clientId, poller.ClientId);
-        await poller.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler> { ["/topic/other"] = Ignore });
+        Assert.Equal(clientId, client.ClientId);
+        await client.SubscribeNewChannelsAsync(new Dictionary<string, BayeuxEventHandler> { ["/topic/other"] = Ignore });
 
-        await WithTimeoutAsync(poller.DisconnectAsync(), TimeSpan.FromSeconds(10));
+        await WithTimeoutAsync(client.DisconnectAsync(), TimeSpan.FromSeconds(10));
 
         Assert.Equal(DisconnectReason.TokenCancellation, (await WithTimeoutAsync(stopped.Task, TimeSpan.FromSeconds(10))).Reason);
 

@@ -13,7 +13,7 @@ namespace Bayeux.Client.Extensible.Authentication
     /// <remarks>
     /// Credentials can be replaced at any time through
     /// <see cref="UpdateCredentials(BasicAuthCredentials)"/>; the change applies to the next
-    /// request without restarting the CometD session.
+    /// request without restarting the Bayeux session.
     /// </remarks>
     public class HttpBasicAuthProvider : IAuthProvider<BasicAuthCredentials>
     {

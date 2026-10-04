@@ -31,7 +31,7 @@ namespace Bayeux.Client.Extensible.Samples;
 /// kept as raw JSON and sent back exactly as received - never parsed, never computed from.
 /// </para>
 /// <para>
-/// The poller calls <see cref="OutgoingAsync"/> and <see cref="Incoming"/> from its own loop and
+/// The client calls <see cref="OutgoingAsync"/> and <see cref="Incoming"/> from its own loop and
 /// from subscribe calls at the same time, so all state here is thread-safe.
 /// </para>
 /// </remarks>
@@ -95,7 +95,7 @@ public sealed class SalesforceReplayExtension : IBayeuxExtension
     // ----------------------------------------------------------------------------------------
 
     /// <inheritdoc/>
-    public Task OutgoingAsync(BaseLongPollingRequestModel requestModel, CancellationToken cancellationToken)
+    public Task OutgoingAsync(BayeuxRequestModel requestModel, CancellationToken cancellationToken)
     {
         if (requestModel.Channel == MetaHandshake)
         {

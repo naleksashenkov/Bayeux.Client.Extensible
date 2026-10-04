@@ -11,11 +11,11 @@ using Xunit;
 namespace Bayeux.Client.Extensible.Tests;
 
 /// <summary>
-/// <see cref="BayeuxAckExtension"/> on its own, and together with the poller retrying a connect
+/// <see cref="BayeuxAckExtension"/> on its own, and together with the client retrying a connect
 /// in the same session.
 /// </summary>
-/// <remarks>Part of <see cref="CometDPollerTests"/> to share its helpers.</remarks>
-public partial class CometDPollerTests
+/// <remarks>Part of <see cref="BayeuxClientTests"/> to share its helpers.</remarks>
+public partial class BayeuxClientTests
 {
     private static JsonElement Json(string text)
     {
@@ -34,7 +34,7 @@ public partial class CometDPollerTests
     // What the extension adds to a connect, or null when it adds nothing.
     private static async Task<object?> ConfirmedOnConnect(BayeuxAckExtension extension, ConnectRequestModel? connect = null)
     {
-        connect ??= new ConnectRequestModel("cid", "1");
+        connect ??= new ConnectRequestModel("cid", "1", "long-polling");
         await extension.OutgoingAsync(connect, CancellationToken.None);
 
         return connect.Ext is { } ext && ext.TryGetValue("ack", out var ack) ? ack : null;
@@ -46,7 +46,7 @@ public partial class CometDPollerTests
     public async Task The_ack_extension_asks_in_the_handshake_and_waits_for_agreement()
     {
         var extension = new BayeuxAckExtension();
-        var handshake = new HandshakeRequestModel("1");
+        var handshake = new HandshakeRequestModel("1", "long-polling");
 
         await extension.OutgoingAsync(handshake, CancellationToken.None);
 
@@ -62,7 +62,7 @@ public partial class CometDPollerTests
     public async Task The_ack_extension_confirms_the_last_batch_of_a_successful_connect()
     {
         var extension = new BayeuxAckExtension();
-        await extension.OutgoingAsync(new HandshakeRequestModel("1"), CancellationToken.None);
+        await extension.OutgoingAsync(new HandshakeRequestModel("1", "long-polling"), CancellationToken.None);
         extension.Incoming(Reply("/meta/handshake", "true"));
 
         Assert.True(extension.IsAckSupported);
@@ -80,13 +80,13 @@ public partial class CometDPollerTests
     public async Task A_new_handshake_starts_the_batches_again()
     {
         var extension = new BayeuxAckExtension();
-        await extension.OutgoingAsync(new HandshakeRequestModel("1"), CancellationToken.None);
+        await extension.OutgoingAsync(new HandshakeRequestModel("1", "long-polling"), CancellationToken.None);
         extension.Incoming(Reply("/meta/handshake", "true"));
         extension.Incoming(Reply("/meta/connect", "5"));
 
         // Batches belong to a session; confirming batch 5 of the old one to the new one would
         // confirm events it never sent.
-        await extension.OutgoingAsync(new HandshakeRequestModel("2"), CancellationToken.None);
+        await extension.OutgoingAsync(new HandshakeRequestModel("2", "long-polling"), CancellationToken.None);
         Assert.False(extension.IsAckSupported);
 
         extension.Incoming(Reply("/meta/handshake", "true"));
@@ -98,14 +98,14 @@ public partial class CometDPollerTests
     {
         // Newer servers answer { enabled, batch } instead of true.
         var agreed = new BayeuxAckExtension();
-        await agreed.OutgoingAsync(new HandshakeRequestModel("1"), CancellationToken.None);
+        await agreed.OutgoingAsync(new HandshakeRequestModel("1", "long-polling"), CancellationToken.None);
         agreed.Incoming(Reply("/meta/handshake", """{"enabled":true,"batch":7}"""));
 
         Assert.True(agreed.IsAckSupported);
         Assert.Equal(7L, await ConfirmedOnConnect(agreed));
 
         var declined = new BayeuxAckExtension();
-        await declined.OutgoingAsync(new HandshakeRequestModel("1"), CancellationToken.None);
+        await declined.OutgoingAsync(new HandshakeRequestModel("1", "long-polling"), CancellationToken.None);
         declined.Incoming(Reply("/meta/handshake", """{"enabled":false}"""));
 
         Assert.False(declined.IsAckSupported);
@@ -116,10 +116,10 @@ public partial class CometDPollerTests
     public async Task The_ack_extension_leaves_other_extensions_keys_in_place()
     {
         var extension = new BayeuxAckExtension();
-        await extension.OutgoingAsync(new HandshakeRequestModel("1"), CancellationToken.None);
+        await extension.OutgoingAsync(new HandshakeRequestModel("1", "long-polling"), CancellationToken.None);
         extension.Incoming(Reply("/meta/handshake", "true"));
 
-        var connect = new ConnectRequestModel("cid", "2")
+        var connect = new ConnectRequestModel("cid", "2", "long-polling")
         {
             Ext = new Dictionary<string, object> { ["replay"] = "kept" }
         };
@@ -128,7 +128,7 @@ public partial class CometDPollerTests
         Assert.Equal("kept", connect.Ext!["replay"]);
     }
 
-    // ---- with the poller ------------------------------------------------------------------------
+    // ---- with the client ------------------------------------------------------------------------
 
     [Fact]
     public async Task With_acknowledgements_an_event_whose_reply_was_lost_is_delivered_again()
@@ -139,14 +139,14 @@ public partial class CometDPollerTests
         var received = new ConcurrentQueue<JsonElement>();
         var ack = new BayeuxAckExtension();
 
-        var options = new PollerOptions(
+        var options = new BayeuxClientOptions(
             new Dictionary<string, BayeuxEventHandler> { ["/topic/a"] = On(data => received.Enqueue(data)) },
             "cometd",
             extensions: [ack],
             reconnectOptions: QuickReconnect());
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         Assert.True(ack.IsAckSupported);
 
@@ -154,7 +154,7 @@ public partial class CometDPollerTests
         server.LoseNextReplyWithEvents = true;
         server.Publish("/topic/a", new { n = 1 });
 
-        // A transport failure, so the poller retries the connect in the same session - still
+        // A transport failure, so the client retries the connect in the same session - still
         // confirming the batch before the lost one - and the server sends the event again.
         Assert.True(await WaitForAsync(() => received.Count == 1));
         Assert.Equal(1, server.HandshakeCount);
@@ -174,8 +174,8 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
         var (options, received) = ReconnectingOptions("/topic/a", QuickReconnect());
 
-        await using var poller = new CometDPoller(http, options, NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
 
         server.LoseNextReplyWithEvents = true;
         server.Publish("/topic/a", new { n = 1 });
@@ -197,9 +197,9 @@ public partial class CometDPollerTests
         using var http = server.CreateClient();
 
         var ack = new BayeuxAckExtension();
-        await using var poller = new CometDPoller(
+        await using var client = new BayeuxClient(
             http, OptionsWith(ack, "/topic/a"), NoAuthProvider.Instance, (_, _) => { });
-        await poller.ConnectAsync();
+        await client.ConnectAsync();
 
         Assert.False(ack.IsAckSupported);
         Assert.True(await WaitForAsync(() => server.RequestBodiesSnapshot.Count(b => b.StartsWith("/cometd/connect ", StringComparison.Ordinal)) >= 1));
