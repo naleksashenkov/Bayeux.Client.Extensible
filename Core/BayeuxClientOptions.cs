@@ -33,6 +33,26 @@ namespace Bayeux.Client.Extensible.Core
         public TimeSpan DisconnectTimeout { get; }
 
         /// <summary>
+        /// How long a reply may take beyond what the server itself spends on it, before a WebSocket
+        /// is given up as dead. Ten seconds by default.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A dead connection - a dropped network, a NAT that forgot it - often says nothing: no error,
+        /// no close, sends still succeed. Only the missing reply tells. A <c>/meta/connect</c> may take
+        /// the server's <c>advice.timeout</c> plus this; any other request, this alone. Past it, the
+        /// socket is aborted, every request on it fails with <c>WebSocketException</c>, and the next
+        /// one opens a new socket - in the same session, with <see cref="ReconnectOptions"/>.
+        /// </para>
+        /// <para>
+        /// Too short, and a slow but healthy network loses its socket over and over; too long, and a
+        /// dead one goes unnoticed for as long. Long-polling does not use it: there,
+        /// <see cref="HttpClient.Timeout"/> plays this part.
+        /// </para>
+        /// </remarks>
+        public TimeSpan MaxNetworkDelay { get; }
+
+        /// <summary>
         /// Path of the Bayeux endpoint, relative to the HTTP client's base address. Message names
         /// are appended to it, producing URIs such as <c>{Path}/connect</c>.
         /// </summary>
@@ -93,8 +113,13 @@ namespace Bayeux.Client.Extensible.Core
         /// <param name="transportType">
         /// The transport, or <c>null</c> for <see cref="BayeuxTransportType.LongPolling"/>.
         /// </param>
+        /// <param name="maxNetworkDelay">
+        /// How long a reply may take beyond the server's own hold before a WebSocket is presumed
+        /// dead; <c>null</c> for ten seconds. See <see cref="MaxNetworkDelay"/>.
+        /// </param>
         /// <exception cref="ArgumentNullException">A required argument is <c>null</c>.</exception>
         /// <exception cref="ArgumentException"><paramref name="extensions"/> contains <c>null</c>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxNetworkDelay"/> is zero or negative.</exception>
         /// <remarks>
         /// One constructor with optional parameters rather than an overload per combination: the
         /// public API analyzer rejects more than one overload with optional parameters (RS0026),
@@ -107,7 +132,8 @@ namespace Bayeux.Client.Extensible.Core
             IEnumerable<IBayeuxExtension>? extensions = null,
             ReconnectOptions? reconnectOptions = null,
             JsonSerializerOptions? jsonSerializerOptions = null,
-            BayeuxTransportType? transportType = null)
+            BayeuxTransportType? transportType = null,
+            TimeSpan? maxNetworkDelay = null)
         {
             if (channels is null)
                 throw new ArgumentNullException(nameof(channels));
@@ -118,6 +144,10 @@ namespace Bayeux.Client.Extensible.Core
             ReconnectOptions = reconnectOptions;
             JsonSerializerOptions = jsonSerializerOptions ?? new(JsonSerializerDefaults.Web);
             TransportType = transportType ?? BayeuxTransportType.LongPolling;
+            MaxNetworkDelay = maxNetworkDelay ?? TimeSpan.FromSeconds(10);
+
+            if (MaxNetworkDelay <= TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(maxNetworkDelay), "Value must be greater than 0");
 
             var copy = extensions?.ToArray() ?? Array.Empty<IBayeuxExtension>();
 

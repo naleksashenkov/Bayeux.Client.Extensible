@@ -64,9 +64,14 @@ namespace Bayeux.Client.Extensible.Core
         /// Meta messages go to <c>{path}/{type}</c>, as CometD clients send them; application
         /// messages to the path itself. Cookies are saved before the status is checked, because an
         /// error response may still rotate the session cookie. A non-success status throws
-        /// <see cref="BayeuxHttpException"/>.
+        /// <see cref="BayeuxHttpException"/>. <paramref name="timeout"/> is ignored:
+        /// <see cref="HttpClient.Timeout"/> already bounds every request, and a dead connection
+        /// surfaces as its timeout.
         /// </remarks>
-        public async Task<BayeuxResponseMessageModel[]> SendAsync(BayeuxRequestModel[] messages, CancellationToken cancellationToken)
+        public async Task<BayeuxResponseMessageModel[]> SendAsync(
+            BayeuxRequestModel[] messages, 
+            CancellationToken cancellationToken, 
+            TimeSpan? timeout)
         {
             if (messages == null || messages.Length == 0)
                 throw new ArgumentException("Messages are null or empty");
@@ -80,7 +85,7 @@ namespace Bayeux.Client.Extensible.Core
                 await _authProvider.ApplyAsync(request, cancellationToken).ConfigureAwait(false);
                 
                 ApplyCookies(request, uri);
-                request.Content = new StringContent(BayeuxRequestModel.FormLongPollingRequestJson(messages), Encoding.UTF8, "application/json");
+                request.Content = new StringContent(BayeuxRequestModel.FormRequestJson(messages), Encoding.UTF8, "application/json");
 
                 using (var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false))
                 {

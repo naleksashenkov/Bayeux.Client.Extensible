@@ -12,35 +12,48 @@ using Xunit;
 namespace Bayeux.Client.Extensible.IntegrationTests;
 
 /// <summary>
-/// Runs the client against the CometD reference implementation, which the fake server in the unit
-/// tests can only imitate. Skipped unless <c>BAYEUX_COMETD_URL</c> points at a running instance;
-/// see <c>tests/cometd-server</c> for how to start one.
+/// Runs the client against the CometD reference implementations, which the fake server in the unit
+/// tests can only imitate. Every test runs once per server and transport - see the classes at the
+/// end of this file - and is skipped unless that server's variable points at a running instance.
+/// See <c>Tests/cometd-server</c> and <c>Tests/cometd-java-server</c> for how to start them.
 /// </summary>
-public class RealCometDTests
+public abstract class RealCometDTests
 {
-    private static string? Url => Environment.GetEnvironmentVariable("BAYEUX_COMETD_URL");
+    /// <summary>
+    /// One collection for all of them, so they run one after another: two classes on the same
+    /// server publish to the same channels, and in parallel each would receive the other's events.
+    /// </summary>
+    public const string Collection = "Reference servers";
 
-    private static bool Available => !string.IsNullOrEmpty(Url);
+    /// <summary>The environment variable holding this server's base address.</summary>
+    protected abstract string UrlVariable { get; }
 
-    private static HttpClient CreateClient(TimeSpan? timeout = null) =>
+    /// <summary>The transport every client in these tests uses.</summary>
+    protected abstract BayeuxTransportType Transport { get; }
+
+    private string? Url => Environment.GetEnvironmentVariable(UrlVariable);
+
+    private void SkipUnlessAvailable() => Skip.If(string.IsNullOrEmpty(Url), $"{UrlVariable} is not set.");
+
+    private HttpClient CreateClient(TimeSpan? timeout = null) =>
         new HttpClient(new HttpClientHandler { UseCookies = false })
         {
             BaseAddress = new Uri(Url!),
             Timeout = timeout ?? Timeout.InfiniteTimeSpan
         };
 
-    private static async Task ControlAsync(string action)
+    private async Task ControlAsync(string action)
     {
         using var control = new HttpClient { BaseAddress = new Uri(Url!) };
         await control.GetStringAsync("control/" + action);
     }
 
-    private static (BayeuxClientOptions options, ConcurrentQueue<JsonElement> received) Options(string channel)
+    private (BayeuxClientOptions options, ConcurrentQueue<JsonElement> received) Options(string channel)
     {
         var received = new ConcurrentQueue<JsonElement>();
         var channels = new ConcurrentDictionary<string, BayeuxEventHandler>();
         channels[channel] = (e, _) => { received.Enqueue(e.Data); return Task.CompletedTask; };
-        return (new BayeuxClientOptions(channels, "cometd"), received);
+        return (new BayeuxClientOptions(channels, "cometd", transportType: Transport), received);
     }
 
     private static async Task<bool> WaitForAsync(Func<bool> condition, int timeoutMs = 15000)
@@ -59,7 +72,7 @@ public class RealCometDTests
     [SkippableFact]
     public async Task Full_session_against_the_reference_server()
     {
-        Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
+        SkipUnlessAvailable();
 
         using var http = CreateClient();
         var (options, received) = Options("/topic/real");
@@ -90,7 +103,7 @@ public class RealCometDTests
     [SkippableFact]
     public async Task Server_initiated_disconnect_stops_the_client()
     {
-        Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
+        SkipUnlessAvailable();
 
         using var http = CreateClient();
         var (options, _) = Options("/topic/kill");
@@ -102,13 +115,21 @@ public class RealCometDTests
             (_, e) => { disconnected = e; done.TrySetResult(); });
 
         await client.ConnectAsync();
+
+        // Only once a connect is held. Killed before the client's first connect, the session is
+        // simply unknown to the server, which answers 402 and advises a new handshake - and the
+        // client, rightly, makes one. The server cannot tell "killed" from "expired" then.
+        Assert.True(await WaitForAsync(() => client.State == BayeuxClientState.Connected));
+        await Task.Delay(300);
+
         await ControlAsync("kill?clientId=" + client.ClientId);
 
         await done.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
-        // CometD's ServerSession.disconnect() sends /meta/disconnect to the client. The
-        // specification requires the client to stop rather than handshake again, so this is a
-        // deliberate shutdown and not a recoverable session loss.
+        // CometD ends the session either way the specification allows: the Node.js port sends
+        // /meta/disconnect, the Java server answers the held connect with advice "none". Both
+        // require the client to stop rather than handshake again, so this is a deliberate shutdown
+        // and not a recoverable session loss.
         Assert.Equal(DisconnectReason.ServerRequirement, disconnected!.Reason);
         Assert.True(disconnected.IsSuccess);
     }
@@ -116,7 +137,11 @@ public class RealCometDTests
     [SkippableFact]
     public async Task Sharing_a_cookie_container_makes_CometD_demote_a_session()
     {
-        Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
+        SkipUnlessAvailable();
+
+        // The limit is one long poll per browser, which is what the shared BAYEUX_BROWSER cookie
+        // stands for. WebSocket holds no poll, so CometD has nothing to demote there.
+        Skip.If(Transport == BayeuxTransportType.WebSocket, "Only long-polling sessions are demoted.");
 
         using var http = CreateClient();
         var shared = new CookieContainer();
@@ -141,7 +166,7 @@ public class RealCometDTests
     [SkippableFact]
     public async Task Private_cookie_containers_keep_sessions_independent()
     {
-        Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
+        SkipUnlessAvailable();
 
         using var http = CreateClient();
 
@@ -170,7 +195,7 @@ public class RealCometDTests
     [SkippableFact]
     public async Task Batched_subscribe_and_unsubscribe_are_accepted_by_the_reference_server()
     {
-        Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
+        SkipUnlessAvailable();
 
         using var http = CreateClient();
         var (options, _) = Options("/topic/batch-setup");
@@ -213,7 +238,7 @@ public class RealCometDTests
     [SkippableFact]
     public async Task The_reference_server_agrees_to_acknowledgements_and_still_delivers()
     {
-        Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
+        SkipUnlessAvailable();
 
         // The wire format checked against CometD's own extension: it agrees in the handshake,
         // numbers the batches, and reads back the confirmations - and events still arrive, once.
@@ -224,7 +249,8 @@ public class RealCometDTests
         var options = new BayeuxClientOptions(
             new Dictionary<string, BayeuxEventHandler> { ["/topic/acked"] = (e, _) => { received.Enqueue(e.Data); return Task.CompletedTask; } },
             "cometd",
-            extensions: [ack]);
+            extensions: [ack],
+            transportType: Transport);
 
         await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
         await client.ConnectAsync();
@@ -246,7 +272,7 @@ public class RealCometDTests
     [SkippableFact]
     public async Task A_message_published_by_one_client_reaches_another_and_its_publisher()
     {
-        Skip.IfNot(Available, "BAYEUX_COMETD_URL is not set.");
+        SkipUnlessAvailable();
 
         // Everything the fake server only imitates, checked against the reference: the publish goes
         // to the base path, the reply is recognised by id, and CometD delivers to every subscriber
@@ -271,4 +297,31 @@ public class RealCometDTests
         Assert.Equal("from-client", Assert.Single(subscriberReceived).GetProperty("text").GetString());
         Assert.Equal("from-client", Assert.Single(publisherReceived).GetProperty("text").GetString());
     }
+}
+
+/// <summary>The Node.js port of CometD. Long-polling only: it has no WebSocket transport.</summary>
+[Collection(RealCometDTests.Collection)]
+public sealed class NodeLongPollingTests : RealCometDTests
+{
+    protected override string UrlVariable => "BAYEUX_COMETD_URL";
+
+    protected override BayeuxTransportType Transport => BayeuxTransportType.LongPolling;
+}
+
+/// <summary>The Java reference server, over long-polling.</summary>
+[Collection(RealCometDTests.Collection)]
+public sealed class JavaLongPollingTests : RealCometDTests
+{
+    protected override string UrlVariable => "BAYEUX_COMETD_JAVA_URL";
+
+    protected override BayeuxTransportType Transport => BayeuxTransportType.LongPolling;
+}
+
+/// <summary>The Java reference server, over WebSocket.</summary>
+[Collection(RealCometDTests.Collection)]
+public sealed class JavaWebSocketTests : RealCometDTests
+{
+    protected override string UrlVariable => "BAYEUX_COMETD_JAVA_URL";
+
+    protected override BayeuxTransportType Transport => BayeuxTransportType.WebSocket;
 }

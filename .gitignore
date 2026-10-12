@@ -29,3 +29,6 @@ coverage*.xml
 # macOS / Windows
 .DS_Store
 Thumbs.db
+
+# The Java reference server's Maven output
+Tests/cometd-java-server/target/

@@ -64,7 +64,7 @@ public partial class BayeuxClientTests
 
         Assert.Equal(DisconnectReason.Failed, outcome.Reason);
         Assert.Equal(HttpStatusCode.InternalServerError, Assert.IsType<BayeuxHttpException>(outcome.Error).StatusCode);
-        Assert.Contains(errors, e => e.Source == ErrorSource.Http && e.IsFatal);
+        Assert.Contains(errors, e => e.Source == ErrorSource.Transport && e.IsFatal);
         Assert.Equal(1, server.HandshakeCount);
     }
 
@@ -98,7 +98,7 @@ public partial class BayeuxClientTests
 
         // Reported, but not as the end: the client carried on, and no disconnect event came.
         Assert.False(raised);
-        Assert.Contains(errors, e => e.Source == ErrorSource.Http && !e.IsFatal);
+        Assert.Contains(errors, e => e.Source == ErrorSource.Transport && !e.IsFatal);
         Assert.DoesNotContain(errors, e => e.IsFatal);
     }
 
@@ -462,7 +462,7 @@ public partial class BayeuxClientTests
         var failed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, e) => stopped.TrySetResult(e));
-        client.OnError += (_, e) => { if (e.Source == ErrorSource.Http) failed.TrySetResult(true); };
+        client.OnError += (_, e) => { if (e.Source == ErrorSource.Transport) failed.TrySetResult(true); };
         await client.ConnectAsync();
 
         var clientId = client.ClientId;

@@ -139,7 +139,7 @@ public partial class BayeuxClientTests
 
         // Once, as an exception: reporting it through OnError as well would announce one failure
         // twice. And the session carries on.
-        Assert.DoesNotContain(errors, e => e.Source == ErrorSource.Http);
+        Assert.DoesNotContain(errors, e => e.Source == ErrorSource.Transport);
         Assert.False(raised);
     }
 

@@ -15,17 +15,31 @@ tag `vx.y.z`. The release workflow refuses to publish a version that has no sect
 - `BayeuxClient`, a Bayeux long-polling client written from the protocol specification:
   handshake, subscribe, unsubscribe, the `/meta/connect` poll loop and advice-driven
   re-handshake, and disconnect.
+- `BayeuxTransportType.WebSocket`: the whole session over one socket, with events pushed as the
+  server has them, replies matched by message id, and handlers run in arrival order. Credentials
+  and cookies go out in the upgrade request; a dropped socket is replaced on the next request, and
+  the session carries on over it. Long-polling stays the default. A failure of either transport is
+  reported as `ErrorSource.Transport`, and a dropped socket is retried like a lost HTTP connection.
+  A socket that goes silent is given up after the server's hold plus
+  `BayeuxClientOptions.MaxNetworkDelay`, ten seconds by default. A `/meta/disconnect` the server
+  pushes on its own stops the client at once, as `ServerRequirement`.
+- `BayeuxTransportType.Auto`: WebSocket where it gets through, long-polling where the upgrade is
+  refused, the server does not offer it, or the socket carries the handshake but not the first
+  connect. The fallback is logged, not reported through `OnError`; once WebSocket has carried a
+  connect it is kept, and each `ConnectAsync` tries it again.
 - `IAuthProvider`, consulted before every request including the handshake, so credentials can be
   attached and replaced at runtime without the protocol layer knowing where they came from.
 - `HttpBasicAuthProvider` with in-place credential replacement, and `NoAuthProvider`.
 - Asynchronous handlers: a `BayeuxEventHandler` receives a `BayeuxEvent` - the concrete channel,
-  the data and any `ext` - with a cancellation token, and is awaited before the next long poll.
-  Its exceptions are reported as `ErrorSource.Handler` without stopping the client. From inside a
-  handler `DisconnectAsync` only signals, and `ConnectAsync` is refused rather than left to hang.
+  the data and any `ext` - with a cancellation token, and is awaited before the next long poll
+  (over a WebSocket, before the next event). Its exceptions are reported as `ErrorSource.Handler`
+  without stopping the client. From inside a handler `DisconnectAsync` only signals, and
+  `ConnectAsync` is refused rather than left to hang.
 - An optional `CancellationToken` on `ConnectAsync`, `SubscribeNewChannelsAsync`,
   `UnsubscribeChannelsAsync` and `DisconnectAsync`. It bounds the call, never the session: a
   cancelled connect leaves nothing open on the server, a cancelled subscribe or unsubscribe rolls
-  its batch back, and a cancelled disconnect stops waiting while the client still stops.
+  its batch back, and a cancelled disconnect stops waiting while the client still stops. Stopping
+  is not reported through `OnError`: the connect it calls off is not a failure.
 - Wildcard subscriptions: `/a/*` for one further segment, `/a/**` for any depth below, with
   overlapping patterns each receiving the message, as CometD does.
 - Batched subscribe and unsubscribe: a whole set of channels travels as one Bayeux message.
@@ -75,7 +89,6 @@ tag `vx.y.z`. The release workflow refuses to publish a version that has no sect
 
 ### Known limitations
 
-- Long-polling only; there is no WebSocket transport.
 - A session that ends - by expiry or a new handshake - loses whatever was still queued for it on
   the server, with or without acknowledgements.
 

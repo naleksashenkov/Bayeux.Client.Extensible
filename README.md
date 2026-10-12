@@ -4,13 +4,13 @@
 
 This library adds that seam. Authentication is a first-class concept: an `IAuthProvider` the client consults when it builds each request, so credentials can be attached and replaced at runtime without the protocol layer knowing how they were obtained.
 
-Everything else is a conforming Bayeux long-polling client, written from the [Bayeux protocol specification](https://docs.cometd.org/current/reference/#_bayeux).
+Everything else is a conforming Bayeux client — over HTTP long-polling or a WebSocket — written from the [Bayeux protocol specification](https://docs.cometd.org/current/reference/#_bayeux).
 
 ## Status
 
-⚠️ **0.1.0-alpha.** The library is exercised end-to-end both against a scripted Bayeux stub and against the [CometD reference server](https://github.com/cometd/cometd-nodejs-server): handshake, subscribe, wildcard delivery, message routing, `402` re-handshake, `reconnect: none`, server-initiated disconnect, cookie isolation between clients, batched subscribe and unsubscribe, partial-batch rollback, reconnect, publishing between clients, acknowledgements. It has **not** yet been run against a production deployment under sustained load.
+⚠️ **0.1.0-alpha.** The library is exercised end-to-end both against a scripted Bayeux stub and against the CometD reference servers — the [Java original](https://github.com/cometd/cometd) over long-polling and WebSocket, and its [Node.js port](https://github.com/cometd/cometd-nodejs-server) over long-polling: handshake, subscribe, wildcard delivery, message routing, `402` re-handshake, `reconnect: none`, server-initiated disconnect, cookie isolation between clients, batched subscribe and unsubscribe, partial-batch rollback, reconnect, publishing between clients, acknowledgements. It has **not** yet been run against a production deployment under sustained load.
 
-Implemented today: `BayeuxClient`, `IAuthProvider`, `HttpBasicAuthProvider`, `NoAuthProvider`, wildcard subscriptions, batched subscribe and unsubscribe, publishing, typed data, connection state, `ext` extensions with acknowledgements, opt-in reconnection with backoff and jitter, optional `ILogger`. Long-polling only — there is no WebSocket transport. Bearer-token, refreshing-token and cookie-session providers, and Salesforce durable replay, are sketched in `Samples/`, not shipped.
+Implemented today: `BayeuxClient`, `IAuthProvider`, `HttpBasicAuthProvider`, `NoAuthProvider`, wildcard subscriptions, batched subscribe and unsubscribe, publishing, typed data, connection state, `ext` extensions with acknowledgements, opt-in reconnection with backoff and jitter, optional `ILogger`, long-polling and WebSocket transports. Bearer-token, refreshing-token and cookie-session providers, and Salesforce durable replay, are sketched in `Samples/`, not shipped.
 
 ## Install
 
@@ -61,12 +61,44 @@ This is the part to get right; everything else is forgiving.
 
 **Timeout must exceed the server's hold time.** The server holds `/meta/connect` open for `advice.timeout` — 30 seconds by default in CometD, and `HttpClient.Timeout` defaults to 100, so the defaults work. If a deployment configures a longer hold, every poll fails on a healthy connection. The client checks this after the handshake and throws with both numbers rather than letting you discover it as a recurring timeout. `Timeout.InfiniteTimeSpan` is the simplest answer when the `HttpClient` is dedicated to Bayeux.
 
+**With a WebSocket, only `BaseAddress` matters.** The socket is the client's own; the timeout and the handler's settings do not apply to it. See [Transports](#transports).
+
 **On .NET Framework, raise the connection limit.** `ServicePointManager.DefaultConnectionLimit` defaults to **2**, and every Bayeux client holds one connection open permanently. The third one against the same host blocks forever with nothing in the logs.
 
 ```csharp
 ServicePointManager.DefaultConnectionLimit = Math.Max(
     ServicePointManager.DefaultConnectionLimit, clientCount + 2);
 ```
+
+## Transports
+
+Long-polling is the default, and works through every proxy. A WebSocket keeps one connection for the whole session, and the server pushes each event the moment it has it instead of holding it for the next `/meta/connect` reply:
+
+```csharp
+new BayeuxClientOptions(channels, "cometd", transportType: BayeuxTransportType.WebSocket);
+```
+
+- **Same address, same path.** `http` becomes `ws` and `https` becomes `wss`. The `HttpClient` supplies only its `BaseAddress`: the socket is opened by the client, so the handler's proxy and certificates and `HttpClient.Timeout` do not apply to it.
+- **Credentials go out once per socket**, in the upgrade request. The `IAuthProvider` is called for it like for any request, and the headers it sets are carried over — nothing else is. New credentials from `UpdateCredentials` take effect when the next socket opens. Cookies work as with long-polling: the client's container is sent with the upgrade, and what the server sets on it is kept.
+- **The server must offer it.** A server without WebSocket refuses the upgrade and `ConnectAsync` throws `WebSocketException`; one that accepts the socket but does not list `websocket` in the handshake fails with `ErrorSource.Configuration`. Use `Auto`, below, to fall back to long-polling instead.
+- **Events run in order, apart from the connect.** A handler sees a channel's events in the order the server sent them, one after another, as with long-polling. But the next `/meta/connect` does not wait for them — except with [acknowledgements](#acknowledgements), where CometD sends events only in connect replies.
+- **A dropped socket is replaced** by the next request; the session goes on over the new one.
+- **The server may end the session on its own**, with a `/meta/disconnect` pushed over the socket. The client stops at once with `DisconnectReason.ServerRequirement`, as it does over long-polling, and does not reconnect whatever `ReconnectOptions` say.
+- **A dead socket is found by its silence.** A connection lost somewhere on the way often reports nothing, and sends into it still succeed. So every reply has a deadline: the server's `advice.timeout` plus `BayeuxClientOptions.MaxNetworkDelay` for `/meta/connect`, which the server holds, and `MaxNetworkDelay` alone for anything else. Past it the socket is aborted with a `WebSocketException`, and with `ReconnectOptions` the session carries on over a new one. Ten seconds by default; raise it for a slow network, since every miss costs a socket.
+- **On .NET Framework, Windows 8 or Windows Server 2012** at least: earlier versions have no WebSocket support.
+- **Salesforce** offers long-polling only.
+
+**`BayeuxTransportType.Auto`** tries WebSocket and falls back to long-polling where it does not get through — for a client deployed behind proxies you do not control:
+
+```csharp
+new BayeuxClientOptions(channels, "cometd", transportType: BayeuxTransportType.Auto);
+```
+
+- **It falls back** when the upgrade is refused, when the server does not offer `websocket`, or when the socket carries the handshake but not the first `/meta/connect` — a proxy that lets the upgrade pass and drops the frames after it.
+- **It is not an error.** The client recovers, so nothing reaches `OnError`; the fallback is logged as a warning.
+- **Once WebSocket has worked, it stays.** After the first answered `/meta/connect` a dropped socket is a network failure, reconnected like any other — not a reason to switch.
+- **Each `ConnectAsync` tries WebSocket again**, so a proxy fixed meanwhile is noticed on restart.
+- **Both transports' rules apply**: `UseCookies = false`, and an `HttpClient.Timeout` longer than the server's hold, since the client may end up on long-polling.
 
 ## Logging
 
@@ -170,7 +202,7 @@ A handler receives the event and a cancellation token, and returns a task:
 
 `e.Channel` is the concrete channel the event arrived on — for a pattern like `/topic/**`, which of the matching channels it was. `e.Data` is the payload, `e.Ext` any extension data. A handler with nothing to await returns `Task.CompletedTask`.
 
-**Handlers are awaited.** The next long poll is not sent until they finish, so a slow handler delays every event behind it while the server holds them. A handler that runs longer than the server's session timeout — CometD's `maxInterval`, 10 seconds by default — lets the session expire, and whatever the server was holding is lost. Keep handlers short, and hand long work to a queue of your own.
+**Handlers are awaited.** The next long poll is not sent until they finish, so a slow handler delays every event behind it while the server holds them. A handler that runs longer than the server's session timeout — CometD's `maxInterval`, 10 seconds by default — lets the session expire, and whatever the server was holding is lost. Keep handlers short, and hand long work to a queue of your own. Over a [WebSocket](#transports) the connect does not wait for handlers, so the session is not at risk; events still run one at a time, and a slow handler still delays the ones behind it.
 
 **Honour the token.** It is cancelled when the client stops, and `DisconnectAsync` waits for a running handler — one that ignores the token holds up shutdown for as long as it runs. Cancellation it causes is not reported as an error.
 
@@ -298,7 +330,7 @@ try { await client.DisconnectAsync(shutdown.Token); }
 catch (OperationCanceledException) { /* still stopping in the background */ }
 ```
 
-Handlers and extensions receive the **session's** token, not the caller's. It is cancelled when the client stops, and a cancellation it causes is not reported as an error.
+Handlers and extensions receive the **session's** token, not the caller's. It is cancelled when the client stops, and a cancellation it causes is not reported as an error. Nor is the stop itself: the `/meta/connect` it calls off does not reach `OnError`.
 
 `ClientId` is non-empty only while a session is fully established — handshake **and** subscriptions. It empties and fills again on every re-handshake inside the connect loop, so an empty value on a running client is normal recovery rather than a failure, and a runtime `SubscribeNewChannelsAsync` landing in that window is refused. Use it to correlate with server logs, not as a connection flag: it is written by the client's task and read by yours. Whether the client is connected is what `State` is for — see [Events](#events).
 
@@ -358,7 +390,7 @@ To have the client re-establish a session after an error, pass `ReconnectOptions
 var options = new BayeuxClientOptions(channels, "cometd", reconnectOptions: new ReconnectOptions());
 ```
 
-After a failure the client waits and tries again. **A transport failure keeps the session**: no answer, a timeout or an HTTP error says nothing about the session, which the server holds until its `maxInterval` with every event published meanwhile queued in it — so the client retries `/meta/connect` with the same `ClientId` and loses nothing that was still queued. If the session did expire, the server answers `402` and the client handshakes again. **A refusal ends the session**: after a refused handshake or connect the client handshakes again and resubscribes every channel. Attempt *n* waits a random time between zero and `min(MaxDelay, InitialDelay × Multiplier^(n−1))` — one second doubling up to thirty by default. The bound grows so that a server that is down is not hammered; the randomness ("full jitter") keeps a thousand clients dropped by one restart from all coming back in the same millisecond. The count starts again once a `/meta/connect` succeeds.
+After a failure the client waits and tries again. **A transport failure keeps the session**: no answer, a timeout, an HTTP error or a dropped WebSocket says nothing about the session, which the server holds until its `maxInterval` with every event published meanwhile queued in it — so the client retries `/meta/connect` with the same `ClientId` and loses nothing that was still queued. If the session did expire, the server answers `402` and the client handshakes again. **A refusal ends the session**: after a refused handshake or connect the client handshakes again and resubscribes every channel. Attempt *n* waits a random time between zero and `min(MaxDelay, InitialDelay × Multiplier^(n−1))` — one second doubling up to thirty by default. The bound grows so that a server that is down is not hammered; the randomness ("full jitter") keeps a thousand clients dropped by one restart from all coming back in the same millisecond. The count starts again once a `/meta/connect` succeeds.
 
 **Only errors that can clear by themselves are retried.** `ReconnectOptions.IsRetriable`, the default, retries a lost connection, a timeout, HTTP 5xx, 408 and 429, and a refused handshake or connect whose advice invites another. It does **not** retry 401, 403, or a handshake or connect refused with `advice.reconnect: "none"`: repeating a rejected login every few seconds is how a service account gets locked. Failures are thrown as typed exceptions, so your own predicate can tell them apart:
 

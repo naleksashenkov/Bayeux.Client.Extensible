@@ -61,7 +61,7 @@ jobs:
         run: dotnet test Tests/Bayeux.Client.Extensible.Tests --framework net472 --configuration Release --verbosity normal
 
   integration:
-    name: Integration against a real CometD server
+    name: Integration against the CometD reference servers
     runs-on: ubuntu-latest
 
     steps:
@@ -89,7 +89,27 @@ jobs:
             sleep 1
           done
 
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Start the CometD reference server (Java)
+        run: |
+          cd Tests/cometd-java-server
+          mvn -q -B package dependency:copy-dependencies -DincludeScope=runtime
+          java -cp "target/classes:target/dependency/*" bayeux.testserver.TestServer &
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:8098/cometd/handshake -X POST \
+              -H 'Content-Type: application/json' \
+              -d '[{"channel":"/meta/handshake","version":"1.0","supportedConnectionTypes":["long-polling"],"id":"probe"}]' && break
+            sleep 1
+          done
+
       - name: Run integration tests
         env:
           BAYEUX_COMETD_URL: http://127.0.0.1:8099/
+          BAYEUX_COMETD_JAVA_URL: http://127.0.0.1:8098/
         run: dotnet test Tests/Bayeux.Client.Extensible.IntegrationTests --configuration Release --verbosity normal

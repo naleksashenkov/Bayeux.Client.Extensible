@@ -3,6 +3,7 @@
 // See LICENSE in the repository root for full license information.
 
 using System.Net;
+using System.Net.WebSockets;
 
 namespace Bayeux.Client.Extensible.Core
 {
@@ -128,7 +129,8 @@ namespace Bayeux.Client.Extensible.Core
         /// <param name="ex">The error that ended the attempt.</param>
         /// <returns>Whether waiting and trying again can help.</returns>
         /// <remarks>
-        /// Retried: no response at all (refused, reset, DNS), a timeout, HTTP 5xx, 408 and 429, and
+        /// Retried: no response at all (refused, reset, DNS), a dropped WebSocket, a timeout, HTTP 5xx,
+        /// 408 and 429, and
         /// a refused handshake or connect whose advice invites another one. Not retried: any other
         /// HTTP status - 401 and 403 above all, where repeating a rejected login can lock the
         /// account - a handshake or connect refused with advice <c>none</c> or none at all, and
@@ -151,6 +153,7 @@ namespace Bayeux.Client.Extensible.Core
                 || http.StatusCode == HttpStatusCode.RequestTimeout,
             HttpRequestException => true,
             OperationCanceledException => true,
+            WebSocketException => true,
             BayeuxConnectException connect => connect.Reconnect == "handshake" || connect.Reconnect == "retry",
             _ => false,
         };

@@ -4,13 +4,14 @@
 
 using Bayeux.Client.Extensible.Authentication;
 using System.Net;
-using System.Text;
 using System.Text.Json;
 using static Bayeux.Client.Extensible.Core.BayeuxConstants;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Net.WebSockets;
 
 namespace Bayeux.Client.Extensible.Core
 {
@@ -27,6 +28,10 @@ namespace Bayeux.Client.Extensible.Core
     /// share one <see cref="HttpClient"/> without their sessions colliding. The HttpClient's handler must
     /// therefore have <c>UseCookies = false</c>; otherwise both layers manage cookies and sessions
     /// on the same host overwrite one another.
+    /// </para>
+    /// <para>
+    /// With <see cref="BayeuxTransportType.WebSocket"/> the HttpClient supplies only its base
+    /// address: the socket is opened by the client itself, with the same credentials and cookies.
     /// </para>
     /// </remarks>
     public sealed class BayeuxClient : IBayeuxClient
@@ -61,16 +66,45 @@ namespace Bayeux.Client.Extensible.Core
         // dispatch without it, which a ConcurrentDictionary allows.
         private readonly ConcurrentDictionary<string, BayeuxEventHandler> _channels;
 
+        // Guards _pushed: the receive loop of one socket appends to it, and so may the loop of its
+        // replacement before the old one has ended.
+        private readonly object _pushedGate = new();
+
+        // Auto only: both transports, created up front and disposed together. _transport is one of
+        // them at any time. Null for a fixed transport, which _transport alone holds.
+        private readonly IBayeuxTransport? _webSocketTransport;
+
+        private readonly IBayeuxTransport? _longPollingTransport;
+
+        // How messages travel. Lives as long as the client: a stopped client may be connected again,
+        // so the loop disposes it only once the client itself is disposed.
+        private volatile IBayeuxTransport _transport;
+
         private Task? _bayeuxTask;
 
-        private long _cometdMessageId = 0;
+        // The server's advice.timeout: how long it holds a /meta/connect. Taken from the handshake
+        // and from any connect reply that carries advice; null until the server has advised one.
+        // Written by the handshake and the loop and read only when a connect is sent - by the loop,
+        // which starts after the first handshake - so it is never shared between threads at once.
+        private int? _serverTimeoutMs;
+
+        // The token source of the /meta/connect in flight, linked to the session's token, or null
+        // between connects. StopByServer cancels it to call off the wait without stopping the session
+        // the way the session's own token would.
+        private CancellationTokenSource? _connectCts;
+
+        private long _messageId = 0;
 
         // BayeuxClientState as an int, because Interlocked works on ints. Changed by whichever thread makes
         // the transition - the caller's in ConnectAsync, the loop's afterwards - and only through
         // ChangeState.
         private int _stateCode = (int)BayeuxClientState.Disconnected;
 
-        private readonly IBayeuxTransport _transport;
+        // 1 once the server has ended the session on its own, over a WebSocket. Set by the dispatch
+        // of pushed messages, read by the loop before and after it publishes _connectCts: written
+        // through Interlocked on both sides, since each side writes first and then reads the other's -
+        // a pair volatile cannot keep in order. Reset when a new session is set up.
+        private int _stoppedByServer;
 
         private bool _isMultipleClientsWarningShown;
 
@@ -81,6 +115,11 @@ namespace Bayeux.Client.Extensible.Core
         // not overlap: ConnectAsync waits for the previous loop before it sets anything up.
         private volatile bool _isLoopRunning;
 
+        // Auto only: whether WebSocket has carried an answered /meta/connect since the last
+        // ConnectAsync. Until then a WebSocket failure means it does not get through, and the client
+        // falls back; after, a failure is the network's and is retried like any other.
+        private volatile bool _webSocketEnsured;
+
         /// <summary>
         /// Whether a failed connect or handshake stops the client, which is what
         /// <see cref="BayeuxErrorEventArgs.IsFatal"/> reports: always during
@@ -90,7 +129,11 @@ namespace Bayeux.Client.Extensible.Core
         private bool FailureEndsConnection => !_isLoopRunning || Options.ReconnectOptions is null;
 
         /// <summary>Returns the next Bayeux message id. Ids are per-client and monotonic.</summary>
-        private string GetNextId() => Interlocked.Increment(ref _cometdMessageId).ToString();
+        private string GetNextId() => Interlocked.Increment(ref _messageId).ToString();
+
+        // The last batch of pushed messages queued for delivery; each new batch runs after it.
+        // See OnPushed.
+        private Task _pushed = Task.CompletedTask;
 
         /// <inheritdoc/>
         public IAuthProvider AuthProvider { get; }
@@ -175,17 +218,50 @@ namespace Bayeux.Client.Extensible.Core
             AuthProvider = authProvider ?? throw new ArgumentNullException(nameof(authProvider));
             ClientId = string.Empty;
 
-            _channels = new ConcurrentDictionary<string, BayeuxEventHandler>(options.Channels);
+            _channels = new ConcurrentDictionary<string, BayeuxEventHandler>(Options.Channels);
 
             OnDisconnected = onDisconnected ?? throw new ArgumentNullException(nameof(onDisconnected));
             
             _logger = logger ?? NullLogger<BayeuxClient>.Instance;
-            _transport = Options.TransportType switch
+            
+            switch (Options.TransportType)
             {
-                BayeuxTransportType.LongPolling => new LongPollingTransport(httpClient, authProvider, options.Path, cookie ?? new CookieContainer()),
-                BayeuxTransportType.WebSocket => throw new NotImplementedException("WebSocket transport is not implemented yet."),
-                _ => throw new ArgumentOutOfRangeException(nameof(options.TransportType), options.TransportType, null)
-            };
+                case BayeuxTransportType.LongPolling:
+                    _transport = new LongPollingTransport(
+                        httpClient, 
+                        authProvider, 
+                        Options.Path, 
+                        cookie ?? new CookieContainer());
+                break;
+                case BayeuxTransportType.WebSocket:
+                    _transport = new WebSocketTransport(
+                        httpClient.BaseAddress, 
+                        authProvider, 
+                        Options.Path, 
+                        cookie ?? new CookieContainer(),
+                        OnPushed);
+                break;
+                case BayeuxTransportType.Auto:
+                    var cookieContainer = cookie ?? new CookieContainer();
+
+                    _longPollingTransport = new LongPollingTransport(
+                        httpClient, 
+                        authProvider, 
+                        Options.Path, 
+                        cookieContainer);
+                    
+                    _webSocketTransport = new WebSocketTransport(
+                        httpClient.BaseAddress, 
+                        authProvider, 
+                        Options.Path, 
+                        cookieContainer,
+                        OnPushed);
+
+                    _transport = _webSocketTransport;
+                break;
+                default: 
+                    throw new ArgumentOutOfRangeException(nameof(options.TransportType), Options.TransportType, null);
+            }
             _token = _bayeuxCts.Token;
         }
 
@@ -195,18 +271,25 @@ namespace Bayeux.Client.Extensible.Core
         /// <remarks>
         /// The loop finishes asynchronously, so it may still send <c>/meta/disconnect</c> and raise
         /// <see cref="OnDisconnected"/> after this method returns &#8212; using the
-        /// <see cref="HttpClient"/> that was passed in. Use <see cref="DisposeAsync"/> when the
-        /// caller needs shutdown to have completed before it continues.
+        /// <see cref="HttpClient"/> that was passed in, or the WebSocket, which the loop closes
+        /// last. Use <see cref="DisposeAsync"/> when the caller needs shutdown to have completed
+        /// before it continues.
         /// </remarks>
         public void Dispose()
         {
             if (_isDestroyed)
                 return;
 
+            // The flag before the cancellation: the loop, woken by it, reads the flag to decide
+            // whether to dispose the transport.
+            _isDestroyed = true;
             _bayeuxCts.Cancel();
 
-            _isDestroyed = true;
-            _transport.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
+            if (_bayeuxTask is null)
+            {
+                _ = DisposeTransportsAsync();
+            }
+                
         }
 
         /// <summary>
@@ -240,7 +323,7 @@ namespace Bayeux.Client.Extensible.Core
                     _bayeuxTask = null;
             }
 
-            await _transport.DisposeAsync().ConfigureAwait(false);
+            await DisposeTransportsAsync().ConfigureAwait(false);
             _bayeuxCts.Dispose();
             _channelLock.Dispose();
 
@@ -261,6 +344,14 @@ namespace Bayeux.Client.Extensible.Core
 
             await DisconnectAsync(cancellationToken).ConfigureAwait(false);
             using var call = CancellationTokenSource.CreateLinkedTokenSource(_token, cancellationToken);
+
+            // Auto: every ConnectAsync tries WebSocket again, so a fixed proxy is noticed on restart.
+            // Never inside the loop, where every reconnect would first fail the same way.
+            if (Options.TransportType == BayeuxTransportType.Auto)
+            {
+                _transport = _webSocketTransport!;
+                _webSocketEnsured = false;
+            }
 
             try
             {
@@ -524,7 +615,7 @@ namespace Bayeux.Client.Extensible.Core
             
             var jsonData = JsonSerializer.SerializeToElement(data, data?.GetType() ?? typeof(object), Options.JsonSerializerOptions);
             var request = new PublishRequestModel(clientId, channel, jsonData, GetNextId());
-            var messages = await PostCometdAsync([request], call.Token).ConfigureAwait(false);
+            var messages = await ExchangeAsync([request], call.Token).ConfigureAwait(false);
 
             var response = messages.FirstOrDefault(message => message.Id == request.RequestId && message.IsSuccessful is not null);
 
@@ -571,7 +662,18 @@ namespace Bayeux.Client.Extensible.Core
             {
                 _isMultipleClientsWarningShown = false;
                 ClientId = string.Empty;
-                var clientId = await HandshakeAsync(cancellationToken).ConfigureAwait(false);
+                Interlocked.Exchange(ref _stoppedByServer, 0);
+
+                string clientId;
+                try
+                {
+                    clientId = await HandshakeAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (CanFallBack(ex))
+                {
+                    FallBackToLongPolling(ex);
+                    clientId = await HandshakeAsync(cancellationToken).ConfigureAwait(false); 
+                }
 
                 if (_channels.Count > 0)
                     await SubscribeChannelsAsync(clientId, _channels.Keys, FailureEndsConnection, cancellationToken).ConfigureAwait(false);
@@ -670,9 +772,18 @@ namespace Bayeux.Client.Extensible.Core
                             // a session set up by ConnectAsync is not yet proof that polling works.
                             ChangeState(BayeuxClientState.Connected);
                             attempts = 0;
+
+                            if (_transport == _webSocketTransport)
+                                _webSocketEnsured = true;
                         }
 
                         await Task.Delay(ConnectInterval ?? 0, _token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (!_token.IsCancellationRequested && CanFallBack(ex))
+                    {
+                        FallBackToLongPolling(ex);
+                        ClientId = string.Empty;
+                        needSetUp = true;
                     }
                     catch (Exception ex) when (
                         !_token.IsCancellationRequested && 
@@ -692,7 +803,10 @@ namespace Bayeux.Client.Extensible.Core
                         // A transport failure says nothing about the session: keep it, and retry the
                         // connect with the same id. Anything else - a refused handshake or connect -
                         // means it is gone.
-                        if (ex is not HttpRequestException and not BayeuxHttpException and not OperationCanceledException)
+                        if (ex is not HttpRequestException 
+                            and not BayeuxHttpException 
+                            and not OperationCanceledException
+                            and not WebSocketException)
                         {
                             // The session is lost. Clearing the id makes a subscribe meanwhile fail at
                             // once with "re-establishing", and tells the shutdown there is nothing to close.
@@ -726,6 +840,13 @@ namespace Bayeux.Client.Extensible.Core
 
                 ChangeState(BayeuxClientState.Disconnected, failure);
                 await TryDisconnectAsync(disconnectReason, failure).ConfigureAwait(false);
+
+                // Only on disposal, after the disconnect has gone out over it. A client that merely
+                // stopped may be connected again - even from the OnDisconnected handler, while this
+                // very block runs - and needs its transport. DisposeAsync disposes it once more, which
+                // a transport tolerates.
+                if (_isDestroyed)
+                    await DisposeTransportsAsync().ConfigureAwait(false);
             }
         }
 
@@ -741,16 +862,51 @@ namespace Bayeux.Client.Extensible.Core
         /// advice, or a <c>/meta/disconnect</c>, is a clean stop instead.
         /// </exception>
         /// <remarks>
-        /// Also applies <c>advice.interval</c> and raises the one-off warning about several clients
-        /// sharing a browser cookie.
+        /// <para>
+        /// Also applies <c>advice.interval</c> and <c>advice.timeout</c>, and raises the one-off
+        /// warning about several clients sharing a browser cookie.
+        /// </para>
+        /// <para>
+        /// Over a WebSocket the server may end the session in a message of its own rather than in
+        /// this reply. Then <see cref="StopByServer"/> cancels this connect's own token - not the
+        /// session's, which would make it a stop by the caller - and the result is the same clean
+        /// stop. The flag is checked again after the token is published, for a stop that came in
+        /// between.
+        /// </para>
         /// </remarks>
         private async Task<ConnectResult> ConnectOneAsync()
         {
+            if (Volatile.Read(ref _stoppedByServer) == 1)
+                return ConnectResult.Stop;
+
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(_token);
+            Interlocked.Exchange(ref _connectCts, connectCts);
+
+            BayeuxResponseMessageModel[] messages;
+
+            try
+            {
+                if (Volatile.Read(ref _stoppedByServer) == 1)
+                    return ConnectResult.Stop;
+                
+                messages = await ExchangeAsync(
+                    [new ConnectRequestModel(ClientId, GetNextId(), _transport.ConnectionType)], 
+                    connectCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (Volatile.Read(ref _stoppedByServer) == 1 && !_token.IsCancellationRequested)
+            {
+                return ConnectResult.Stop;
+            }
+            finally
+            {
+                Interlocked.CompareExchange(ref _connectCts, null, connectCts);
+            }
+
             BayeuxResponseAdviceModel? advice = null;
             BayeuxResponseMessageModel? refusal = null;
 
             var verdict = ConnectResult.Continue;
-            var messages = await PostCometdAsync([new ConnectRequestModel(ClientId, GetNextId(), _transport.ConnectionType)], _token).ConfigureAwait(false);
 
             foreach (var message in messages)
             {
@@ -760,6 +916,8 @@ namespace Bayeux.Client.Extensible.Core
                     if (advice != null)
                     {
                         ConnectInterval = advice.Interval ?? ConnectInterval;
+                        _serverTimeoutMs = advice.Timeout ?? _serverTimeoutMs;
+
                         verdict = VerdictConnectResult(advice);
 
                         if (advice.IsMultipleClients == true && _isMultipleClientsWarningShown == false)
@@ -974,7 +1132,7 @@ namespace Bayeux.Client.Extensible.Core
             {
                 using (var cts = new CancellationTokenSource(Options.DisconnectTimeout))
                 {
-                    var messages = await PostCometdAsync([new DisconnectRequestModel(ClientId, GetNextId())], cts.Token).ConfigureAwait(false);
+                    var messages = await ExchangeAsync([new DisconnectRequestModel(ClientId, GetNextId())], cts.Token).ConfigureAwait(false);
 
                     var message = messages.FirstOrDefault(message => message.Channel == MetaChannels.Disconnect);
 
@@ -1032,7 +1190,7 @@ namespace Bayeux.Client.Extensible.Core
             for (var i = 0; i < list.Count; i++)
                 requestModels[i] = new SubscribeRequestModel(clientId, list[i], GetNextId());
 
-            var messages = await PostCometdAsync(requestModels, cancellationToken, true).ConfigureAwait(false);
+            var messages = await ExchangeAsync(requestModels, cancellationToken, true).ConfigureAwait(false);
 
             var subscribeMessages = messages.Where(message => message.Channel == MetaChannels.Subscribe);
 
@@ -1082,7 +1240,7 @@ namespace Bayeux.Client.Extensible.Core
             for (var i = 0; i < list.Count; i++)
                 requestModels[i] = new UnsubscribeRequestModel(clientId, list[i], GetNextId());
 
-            var messages = await PostCometdAsync(requestModels, cancellationToken, true).ConfigureAwait(false);
+            var messages = await ExchangeAsync(requestModels, cancellationToken, true).ConfigureAwait(false);
 
             var unsubscribeMessages = messages.Where(message => message.Channel == MetaChannels.Unsubscribe);
 
@@ -1116,7 +1274,14 @@ namespace Bayeux.Client.Extensible.Core
         /// </remarks>
         private async Task<string> HandshakeAsync(CancellationToken cancellationToken)
         {
-            var messages = await PostCometdAsync([new HandshakeRequestModel(GetNextId(), _transport.ConnectionType)], cancellationToken, true).ConfigureAwait(false);
+            HandshakeRequestModel handshakeModel;
+
+            if (Options.TransportType == BayeuxTransportType.Auto)
+                handshakeModel = new HandshakeRequestModel(GetNextId(), "websocket", "long-polling");
+            else
+                handshakeModel = new HandshakeRequestModel(GetNextId(), _transport.ConnectionType);
+
+            var messages = await ExchangeAsync([handshakeModel], cancellationToken, true).ConfigureAwait(false);
 
             var message = messages.FirstOrDefault(message => message.Channel == MetaChannels.Handshake);
 
@@ -1132,11 +1297,17 @@ namespace Bayeux.Client.Extensible.Core
                     FailureEndsConnection);
 
             if (message.SupportedConnectionTypes is { } supported && !supported.Contains(_transport.ConnectionType))
-                throw RaiseOnError(ErrorSource.Configuration,
-                    $"The server does not support the transport {_transport.ConnectionType}. Supported: {string.Join(", ", supported)}",
-                    FailureEndsConnection);
+            {
+                var notSupported = new BayeuxTransportNotSupportedException(_transport.ConnectionType, supported!);
+
+                if (CanFallBack(notSupported))
+                    throw notSupported;
+
+                throw RaiseOnError(ErrorSource.Configuration, notSupported, FailureEndsConnection);   
+            }
 
             ValidateClientTimeout(message.Advice?.Timeout);
+            _serverTimeoutMs = message.Advice?.Timeout ?? _serverTimeoutMs;
 
             if (!string.IsNullOrEmpty(message.ClientId))
             {
@@ -1148,10 +1319,13 @@ namespace Bayeux.Client.Extensible.Core
             throw RaiseOnError(ErrorSource.Handshake, "Failed to receive a valid clientId.", FailureEndsConnection);
         }
 
-        /// <summary>Sends one Bayeux request and parses the reply.</summary>
+        /// <summary>
+        /// One exchange with the server, whatever the transport: outgoing extensions, the send,
+        /// incoming extensions, then the events found in the reply.
+        /// </summary>
         /// <param name="requestModel">
-        /// The messages to send as one request. They must share a channel, since the first one names
-        /// the endpoint for all of them.
+        /// The messages to send as one batch. Over long-polling they must share a channel, since the
+        /// first one names the endpoint for all of them.
         /// </param>
         /// <param name="cancellationToken">Cancels the request.</param>
         /// <param name="deferred">
@@ -1163,9 +1337,11 @@ namespace Bayeux.Client.Extensible.Core
         /// <returns>The messages in the reply, possibly empty, never null.</returns>
         /// <remarks>
         /// <para>
-        /// Cookies are captured before the status is checked, because an error response may still
-        /// rotate the session cookie. Transport failures are reported through the error event and
-        /// rethrown; whether they are fatal depends on which message was sent.
+        /// Transport failures are reported through the error event as
+        /// <see cref="ErrorSource.Transport"/> and rethrown; whether they are fatal depends on which
+        /// message was sent. Subscribe, unsubscribe, disconnect and publish are not reported: their
+        /// callers throw them, and reporting them as well would announce one failure twice. How long
+        /// to wait for the reply is decided here too - see <see cref="GetReplyTimeout"/>.
         /// </para>
         /// <para>
         /// Events in the reply are handled here rather than by each caller, so that no response path
@@ -1173,8 +1349,8 @@ namespace Bayeux.Client.Extensible.Core
         /// stop the delegate from ever running, and events already received would be lost.
         /// </para>
         /// </remarks>
-        private async Task<BayeuxResponseMessageModel[]> PostCometdAsync(
-            BayeuxRequestModel[] requestModel, 
+        private async Task<BayeuxResponseMessageModel[]> ExchangeAsync(
+            BayeuxRequestModel[] requestModel,
             CancellationToken cancellationToken,
             bool deferred = false)
         {
@@ -1182,7 +1358,7 @@ namespace Bayeux.Client.Extensible.Core
 
             try
             {
-                var responseMessages = await _transport.SendAsync(requestModel, cancellationToken).ConfigureAwait(false);
+                var responseMessages = await _transport.SendAsync(requestModel, cancellationToken, GetReplyTimeout(requestModel)).ConfigureAwait(false);
 
                 ProcessIncomingExt(responseMessages);
 
@@ -1200,13 +1376,19 @@ namespace Bayeux.Client.Extensible.Core
             }
             catch (Exception ex)
             {   
-                if(!requestModel.Any(model => model is 
+                // A cancellation the client asked for is not a failure: the session is stopping, or the
+                // server ended it and the wait for the connect was called off.
+                var isCanceledByUs = ex is OperationCanceledException && cancellationToken.IsCancellationRequested;
+
+                if(!isCanceledByUs
+                    && !CanFallBack(ex)
+                    && !requestModel.Any(model => model is 
                     SubscribeRequestModel or 
                     DisconnectRequestModel or 
                     UnsubscribeRequestModel or 
                     PublishRequestModel))
                     RaiseOnError(
-                        ErrorSource.Http,
+                        ErrorSource.Transport,
                         ex,
                         FailureEndsConnection);
                 throw;
@@ -1445,6 +1627,174 @@ namespace Bayeux.Client.Extensible.Core
             {
                 _insideDispatch.Value = capturedInsideDispatch;
             }
+        }
+
+        /// <summary>
+        /// Takes the messages a transport received without a request waiting for them - over a
+        /// WebSocket, every event - and queues them for delivery.
+        /// </summary>
+        /// <param name="messages">One frame's worth of such messages.</param>
+        /// <remarks>
+        /// <para>
+        /// Called on the transport's receive loop, which waits for it: it only queues, so reading
+        /// never stalls behind a handler - and never deadlocks behind one that waits for a reply
+        /// the loop has yet to read.
+        /// </para>
+        /// <para>
+        /// The batches run strictly one after another, in the order they arrived, so a handler sees
+        /// a channel's events in the order the server sent them. <c>ContinueWith</c> runs whether the
+        /// previous batch succeeded or not, so one failure does not stop the ones behind it. No
+        /// token: the messages have arrived and the server will not send them again.
+        /// </para>
+        /// </remarks>
+        private void OnPushed(BayeuxResponseMessageModel[] messages)
+        {
+            lock (_pushedGate)
+            {
+                _pushed = _pushed.ContinueWith(
+                    _ => DispatchPushedAsync(messages),
+                    CancellationToken.None,
+                    TaskContinuationOptions.DenyChildAttach,
+                    TaskScheduler.Default)
+                .Unwrap();
+            }
+        }
+
+        /// <summary>One queued batch: incoming extensions first, then the events to their handlers.</summary>
+        /// <param name="messages">The batch.</param>
+        /// <remarks>
+        /// Extensions see pushed messages like any reply, which is what lets the acknowledgement
+        /// extension or a replay extension follow events that never pass through a request. Meta
+        /// messages in the batch - a late reply to a cancelled request - reach the extensions and
+        /// stop there, except a <c>/meta/disconnect</c> of the server's own, which ends the session
+        /// once the events before it have been handled - in <c>finally</c>, so that no failure on
+        /// the way can lose the server's decision. Catches everything: the queue must outlive any
+        /// failure.
+        /// </remarks>
+        private async Task DispatchPushedAsync(BayeuxResponseMessageModel[] messages)
+        {
+            try
+            {
+                ProcessIncomingExt(messages);
+                await ProcessMessagesAsync(messages, false).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                RaiseOnError(ErrorSource.Handler, ex, false);
+            }
+            finally
+            {
+                if (messages.Any(IsServerDisconnect))
+                    StopByServer();
+            }
+        }
+
+        /// <summary>How long the transport may wait for the reply to these messages before it gives the connection up as dead.</summary>
+        /// <param name="messages">The batch about to be sent.</param>
+        /// <returns>
+        /// <see cref="BayeuxClientOptions.MaxNetworkDelay"/> for any request the server answers at
+        /// once; for a <c>/meta/connect</c>, which it holds, its <c>advice.timeout</c> on top of
+        /// that - or <c>null</c>, no limit, while no timeout has been advised.
+        /// </returns>
+        /// <remarks>
+        /// No limit rather than a guess: a limit shorter than the server's hold would abort every
+        /// healthy connect and retry it into the same abort, for ever. Long-polling ignores the value
+        /// and relies on <see cref="HttpClient.Timeout"/>.
+        /// </remarks>
+        private TimeSpan? GetReplyTimeout(BayeuxRequestModel[] messages)
+        {
+            if (!messages.Any(message => message is ConnectRequestModel))
+                return Options.MaxNetworkDelay;
+
+            return _serverTimeoutMs is { } serverTimeout
+                ? TimeSpan.FromMilliseconds(serverTimeout) + Options.MaxNetworkDelay
+                : null;
+        }
+
+        /// <summary>Whether a pushed message is the server ending this session on its own.</summary>
+        /// <param name="message">A message no request was waiting for.</param>
+        /// <returns>
+        /// <c>true</c> for a <c>/meta/disconnect</c> with no message id - one with an id is a late
+        /// reply to the client's own - that names this session or none.
+        /// </returns>
+        private bool IsServerDisconnect(BayeuxResponseMessageModel message) => 
+            message.Channel == MetaChannels.Disconnect
+                && message.Id is null
+                && (message.ClientId is null || message.ClientId == ClientId);
+
+        /// <summary>
+        /// Ends the loop with <see cref="DisconnectReason.ServerRequirement"/>: the flag for the next
+        /// connect, and a cancellation for the one in flight.
+        /// </summary>
+        /// <remarks>
+        /// Nothing is sent: the session is already gone on the server. Not retried either, whatever
+        /// the reconnect policy - the server decided, nothing failed.
+        /// </remarks>
+        private void StopByServer()
+        {
+            Interlocked.Exchange(ref _stoppedByServer, 1);
+            _logger.LogInformation("Session {ClientId} was ended by the server", ClientId);
+
+            try
+            {
+                Volatile.Read(ref _connectCts)?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // That connect has just finished; the loop sees the flag before it sends the next.
+            }
+        }
+
+        /// <summary>Whether <paramref name="error"/> means WebSocket does not get through, and long-polling should take over.</summary>
+        /// <param name="error">What failed.</param>
+        /// <returns>
+        /// <c>true</c> only with <see cref="BayeuxTransportType.Auto"/>, on WebSocket, before it
+        /// has proven itself, for a socket failure or a handshake that does not offer it.
+        /// </returns>
+        /// <remarks>
+        /// Asked in three places: by <c>ExchangeAsync</c>, not to report a failure the client
+        /// recovers from; by <see cref="SetUpConnectionAsync"/>, when the handshake fails; and by
+        /// the loop, when the first connect does. Reads only state, so any of them may ask.
+        /// </remarks>
+        private bool CanFallBack(Exception error) =>
+            Options.TransportType == BayeuxTransportType.Auto
+            && _transport == _webSocketTransport
+            && !_webSocketEnsured
+            && (error is WebSocketException || IsWebSocketNotOffered(error));
+
+        /// <summary>Switches to long-polling for the rest of this <see cref="ConnectAsync"/>.</summary>
+        /// <param name="error">Why, for the log: the only trace the fallback leaves.</param>
+        /// <remarks>
+        /// A session opened over the WebSocket is not carried over - the caller handshakes again -
+        /// nor closed: the server drops it after its <c>maxInterval</c>.
+        /// </remarks>
+        private void FallBackToLongPolling(Exception error)
+        {
+            _logger.LogWarning(error, "WebSocket is not available. Falling back to long polling.");
+            _transport = _longPollingTransport!;
+        }
+
+        /// <summary>Whether the handshake came back over a WebSocket the server does not offer.</summary>
+        /// <param name="error">What failed.</param>
+        /// <returns><c>true</c> for the exception <see cref="HandshakeAsync"/> throws in that case.</returns>
+        private static bool IsWebSocketNotOffered(Exception error) =>
+            error is BayeuxTransportNotSupportedException { ConnectionType: "websocket" };
+
+        /// <summary>Disposes every transport this client created: both with <see cref="BayeuxTransportType.Auto"/>, whichever is in use.</summary>
+        /// <returns>A task that completes once they are closed.</returns>
+        /// <remarks>Each transport tolerates being disposed twice, as the loop and <see cref="DisposeAsync"/> may both do.</remarks>
+        private async Task DisposeTransportsAsync()
+        {
+            if (_webSocketTransport is null && _longPollingTransport is null)
+            {
+                await _transport.DisposeAsync().ConfigureAwait(false);
+                return;
+            }
+            
+            if (_webSocketTransport != null)
+                await _webSocketTransport.DisposeAsync().ConfigureAwait(false);
+            if (_longPollingTransport != null)
+                await _longPollingTransport.DisposeAsync().ConfigureAwait(false);
         }
     }
 }

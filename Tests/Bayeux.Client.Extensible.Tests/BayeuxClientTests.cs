@@ -274,7 +274,7 @@ public partial class BayeuxClientTests
         await Assert.ThrowsAnyAsync<Exception>(() => client.ConnectAsync());
 
         Assert.False(raised);
-        Assert.Contains(errors, e => e.Source == ErrorSource.Http && e.IsFatal);
+        Assert.Contains(errors, e => e.Source == ErrorSource.Transport && e.IsFatal);
     }
 
     [Fact]
@@ -916,7 +916,7 @@ public partial class BayeuxClientTests
 
         // The shape of every negotiated extension: ask in the handshake, act only on a yes. Setup
         // sends the subscribe immediately after the handshake returns, so this only works if the
-        // reply reached Incoming before PostCometdAsync handed it back.
+        // reply reached Incoming before ExchangeAsync handed it back.
         var extension = new TestExtension
         {
             OnIncoming = message =>
@@ -1557,5 +1557,30 @@ public partial class BayeuxClientTests
         // would raise a false alarm on every ordinary shutdown that caught an extension mid-I/O.
         Assert.Equal(DisconnectReason.TokenCancellation, (await WithTimeoutAsync(stopped.Task, TimeSpan.FromSeconds(10))).Reason);
         Assert.DoesNotContain(errors, e => e.Source == ErrorSource.Ext);
+    }
+
+    [Theory]
+    [InlineData(BayeuxTransportType.LongPolling)]
+    [InlineData(BayeuxTransportType.WebSocket)]
+    public async Task Stopping_is_not_reported_as_an_error(BayeuxTransportType transport)
+    {
+        using var server = new FakeBayeuxServer { WebSocketConnectHold = TimeSpan.FromSeconds(5) };
+        using var http = server.CreateClient();
+        var options = new BayeuxClientOptions(
+            new Dictionary<string, BayeuxEventHandler> { ["/topic/stop"] = Ignore }, "cometd", transportType: transport);
+
+        var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
+
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        client.OnError += (_, e) => errors.Enqueue(e);
+        await client.ConnectAsync();
+        Assert.True(await WaitForAsync(() => server.WebSocketFramesSnapshot.Any(f => f.Contains("/meta/connect"))
+                                           || server.RequestBodiesSnapshot.Any(b => b.StartsWith("/cometd/connect"))));
+
+        // The connect in flight is called off by the stop itself: that is not a transport failure,
+        // let alone a fatal one.
+        await client.DisconnectAsync();
+
+        Assert.Empty(errors);
     }
 }

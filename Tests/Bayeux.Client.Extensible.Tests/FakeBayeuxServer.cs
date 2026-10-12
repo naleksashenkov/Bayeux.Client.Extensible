@@ -5,6 +5,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -15,6 +16,11 @@ namespace Bayeux.Client.Extensible.Tests;
 /// A minimal Bayeux server over <see cref="HttpListener"/>. Lets a test drive the real client
 /// over real HTTP and script protocol conditions that a live server will not produce on demand.
 /// </summary>
+/// <remarks>
+/// Speaks both transports on the same address: a POST is long-polling, an upgrade request a
+/// WebSocket. Over a WebSocket the HTTP-status knobs do not apply - there is no HTTP response to
+/// fail - while the Bayeux ones (refusals, 402, a clean stop) do.
+/// </remarks>
 public sealed class FakeBayeuxServer : IDisposable
 {
     private readonly HttpListener _listener = new();
@@ -386,6 +392,139 @@ public sealed class FakeBayeuxServer : IDisposable
         lock (_sync) return _rejectedUnsubscriptions.Contains(channel);
     }
 
+    // ---- WebSocket -----------------------------------------------------------------------------
+
+    private bool _webSocketEnabled = true;
+    private bool _offerWebSocket = true;
+    private bool _dropWebSocketConnects;
+    private TimeSpan _webSocketConnectHold = TimeSpan.FromMilliseconds(500);
+    private TimeSpan _publishReplyDelay;
+    private readonly List<WebSocket> _sockets = new();
+    private readonly HashSet<WebSocket> _mutedSockets = new();
+    private readonly Queue<JsonObject> _pushedDisconnects = new();
+
+    /// <summary>Every frame the client sent over a WebSocket, in order.</summary>
+    public List<string> WebSocketFrames { get; } = new();
+
+    /// <summary>How many WebSocket upgrades were accepted.</summary>
+    public int WebSocketUpgrades;
+
+    /// <summary>
+    /// Whether this server speaks WebSocket. When off it refuses the upgrade with 400 and offers
+    /// only long-polling in the handshake. On by default, as a CometD server with it configured.
+    /// </summary>
+    public bool WebSocketEnabled
+    {
+        get { lock (_sync) return _webSocketEnabled; }
+        set { lock (_sync) _webSocketEnabled = value; }
+    }
+
+    /// <summary>
+    /// Whether the handshake lists <c>websocket</c>. Off: the upgrade is still accepted, but the
+    /// server answers as one that does not offer the transport the client came over. On by default.
+    /// </summary>
+    public bool OfferWebSocket
+    {
+        get { lock (_sync) return _offerWebSocket; }
+        set { lock (_sync) _offerWebSocket = value; }
+    }
+
+    /// <summary>
+    /// Leaves every <c>/meta/connect</c> over a WebSocket unanswered, while the handshake and
+    /// subscribe are answered - a proxy that lets the upgrade through and then drops what follows.
+    /// </summary>
+    public bool DropWebSocketConnects
+    {
+        get { lock (_sync) return _dropWebSocketConnects; }
+        set { lock (_sync) _dropWebSocketConnects = value; }
+    }
+
+    /// <summary>
+    /// How long a <c>/meta/connect</c> is held over a WebSocket. Events do not wait for it: they
+    /// are pushed as they are queued, and the connect is only the heartbeat.
+    /// </summary>
+    public TimeSpan WebSocketConnectHold
+    {
+        get { lock (_sync) return _webSocketConnectHold; }
+        set { lock (_sync) _webSocketConnectHold = value; }
+    }
+
+    /// <summary>
+    /// Delays the reply to every publish over a WebSocket. The socket keeps working meanwhile:
+    /// other requests are answered and events pushed.
+    /// </summary>
+    public TimeSpan PublishReplyDelay
+    {
+        get { lock (_sync) return _publishReplyDelay; }
+        set { lock (_sync) _publishReplyDelay = value; }
+    }
+
+    /// <summary>How many WebSockets are open right now.</summary>
+    public int OpenWebSocketCount
+    {
+        get { lock (_sync) return _sockets.Count(socket => socket.State == WebSocketState.Open); }
+    }
+
+    public string[] WebSocketFramesSnapshot { get { lock (_sync) return WebSocketFrames.ToArray(); } }
+
+    /// <summary>Drops every open WebSocket without a Close frame, as a dead network would.</summary>
+    public void AbortWebSockets()
+    {
+        lock (_sync)
+            // Abort alone leaves HttpListener's connection open, and the client would never notice.
+            foreach (var socket in _sockets) { socket.Abort(); socket.Dispose(); }
+    }
+
+    /// <summary>
+    /// Makes every open WebSocket go silent without closing: frames are still read, but nothing is
+    /// answered or pushed - a connection that died somewhere on the way, which neither end is told
+    /// about. Events stay queued for the session, for whatever socket carries it next.
+    /// </summary>
+    public void MuteWebSockets()
+    {
+        lock (_sync)
+            foreach (var socket in _sockets) _mutedSockets.Add(socket);
+    }
+
+    /// <summary>
+    /// Ends the current session from the server's side, as <c>session.disconnect()</c> does in
+    /// CometD: a <c>/meta/disconnect</c> pushed over its WebSocket, after any events already
+    /// queued. The held connect is left as it is - only the client can call off its wait.
+    /// </summary>
+    /// <param name="clientId">The session it names; <c>null</c> for the current one. Another id imitates a leftover of an old session.</param>
+    /// <param name="id">A message id, as a late reply to the client's own disconnect would carry; <c>null</c> for none, as the server's own has.</param>
+    public void PushDisconnect(string? clientId = null, string? id = null)
+    {
+        var message = new JsonObject
+        {
+            ["channel"] = "/meta/disconnect",
+            ["clientId"] = clientId ?? _currentClientId,
+            ["successful"] = true
+        };
+
+        if (id is not null)
+            message["id"] = id;
+
+        lock (_sync) _pushedDisconnects.Enqueue(message);
+    }
+
+    private JsonObject? TakePushedDisconnect()
+    {
+        lock (_sync) return _pushedDisconnects.Count > 0 ? _pushedDisconnects.Dequeue() : null;
+    }
+
+    private bool IsMuted(WebSocket socket)
+    {
+        lock (_sync) return _mutedSockets.Contains(socket);
+    }
+
+    // The session a socket carries, as far as this server can tell: the last clientId it saw on it.
+    // Written by the socket's reader, read by its pusher.
+    private sealed class SocketSession
+    {
+        public volatile string? ClientId;
+    }
+
     public FakeBayeuxServer()
     {
         Prefix = $"http://127.0.0.1:{FreePort()}/";
@@ -464,6 +603,12 @@ public sealed class FakeBayeuxServer : IDisposable
     {
         try
         {
+            if (ctx.Request.IsWebSocketRequest)
+            {
+                await HandleWebSocketAsync(ctx).ConfigureAwait(false);
+                return;
+            }
+
             var path = ctx.Request.Url!.AbsolutePath.TrimEnd('/');
 
             string body;
@@ -531,7 +676,7 @@ public sealed class FakeBayeuxServer : IDisposable
                     "/cometd/handshake" => Handshake(ctx, request, id),
                     "/cometd/subscribe" => Subscribe(request, id),
                     "/cometd/unsubscribe" => Unsubscribe(request, id),
-                    "/cometd/connect" => await ConnectAsync(request, id, scripted).ConfigureAwait(false),
+                    "/cometd/connect" => await ConnectAsync(request, id, scripted, webSocket: false).ConfigureAwait(false),
                     "/cometd/disconnect" => Disconnect(id),
                     // Application messages go to the base path; meta messages carry their type.
                     "/cometd" => HandlePublish(request, id),
@@ -561,6 +706,161 @@ public sealed class FakeBayeuxServer : IDisposable
         catch
         {
             try { ctx.Response.StatusCode = 500; ctx.Response.Close(); } catch { /* client gone */ }
+        }
+    }
+
+    /// <summary>
+    /// One WebSocket, for as long as it lives: a reader that answers each message on its own
+    /// channel, and a pusher that sends queued events the moment they appear.
+    /// </summary>
+    /// <remarks>
+    /// A held connect and a delayed publish reply run on their own, so the reader keeps going - the
+    /// point of a WebSocket is that nothing waits for them. Sends go through one lock: a WebSocket
+    /// allows one at a time.
+    /// </remarks>
+    private async Task HandleWebSocketAsync(HttpListenerContext ctx)
+    {
+        lock (_sync)
+        {
+            // The upgrade is the only HTTP request: credentials and cookies are seen here, once.
+            AuthHeaders.Add(ctx.Request.Headers["Authorization"]);
+            CookieHeaders.Add(ctx.Request.Headers["Cookie"]);
+        }
+
+        if (!WebSocketEnabled)
+        {
+            ctx.Response.StatusCode = 400;
+            ctx.Response.Close();
+            return;
+        }
+
+        // The 101 response is the only one this socket gets, so a cookie must be set on it.
+        ctx.Response.Headers.Add("Set-Cookie", "BAYEUX_UPGRADE=" + (WebSocketUpgrades + 1) + "; Path=/");
+
+        var socket = (await ctx.AcceptWebSocketAsync(subProtocol: null).ConfigureAwait(false)).WebSocket;
+        Interlocked.Increment(ref WebSocketUpgrades);
+
+        lock (_sync) _sockets.Add(socket);
+
+        var session = new SocketSession();
+        var sendLock = new SemaphoreSlim(1, 1);
+
+        async Task SendAsync(JsonArray messages)
+        {
+            if (IsMuted(socket))
+                return;
+
+            var bytes = Encoding.UTF8.GetBytes(messages.ToJsonString());
+
+            await sendLock.WaitAsync().ConfigureAwait(false);
+            try { await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None).ConfigureAwait(false); }
+            catch { /* the socket is gone; the reader ends on its own */ }
+            finally { sendLock.Release(); }
+        }
+
+        // Pushes events to the socket whose session is current, in the order they were queued.
+        var pusher = Task.Run(async () =>
+        {
+            while (socket.State == WebSocketState.Open && !_cts.IsCancellationRequested)
+            {
+                if (session.ClientId is { } owner && owner == _currentClientId && !PendingEvents.IsEmpty && !IsMuted(socket))
+                {
+                    var batch = new JsonArray();
+                    while (PendingEvents.TryDequeue(out var queued))
+                        batch.Add(queued);
+
+                    await SendAsync(batch).ConfigureAwait(false);
+                }
+
+                // After the events, as a server flushes its queue in order.
+                if (session.ClientId is { } current && current == _currentClientId && !IsMuted(socket) && TakePushedDisconnect() is { } goodbye)
+                    await SendAsync(new JsonArray(goodbye)).ConfigureAwait(false);
+
+                await Task.Delay(10).ConfigureAwait(false);
+            }
+        });
+
+        var buffer = new byte[16 * 1024];
+
+        try
+        {
+            while (socket.State == WebSocketState.Open)
+            {
+                using var stream = new MemoryStream();
+                WebSocketReceiveResult result;
+
+                do
+                {
+                    result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token).ConfigureAwait(false);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        // Answer the client's Close, which completes the closing handshake.
+                        await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None).ConfigureAwait(false);
+                        return;
+                    }
+
+                    stream.Write(buffer, 0, result.Count);
+                }
+                while (!result.EndOfMessage);
+
+                var body = Encoding.UTF8.GetString(stream.ToArray());
+                lock (_sync) WebSocketFrames.Add(body);
+
+                foreach (var node in JsonNode.Parse(body)!.AsArray())
+                {
+                    var request = node!.AsObject();
+                    var id = request["id"]?.GetValue<string>();
+                    var channel = request["channel"]!.GetValue<string>();
+
+                    if (request["clientId"]?.GetValue<string>() is { } clientId)
+                        session.ClientId = clientId;
+
+                    if (channel == "/meta/connect" && DropWebSocketConnects)
+                        continue;
+
+                    if (channel == "/meta/connect")
+                    {
+                        _ = Task.Run(async () => await SendAsync(await ConnectAsync(request, id, scripted: null, webSocket: true).ConfigureAwait(false)).ConfigureAwait(false));
+                        continue;
+                    }
+
+                    var reply = channel switch
+                    {
+                        "/meta/handshake" => Handshake(null, request, id),
+                        "/meta/subscribe" => Subscribe(request, id),
+                        "/meta/unsubscribe" => Unsubscribe(request, id),
+                        "/meta/disconnect" => Disconnect(id),
+                        _ => HandlePublish(request, id)
+                    };
+
+                    // A new session is pushed to from now on, before the client sends anything with its id.
+                    if (channel == "/meta/handshake" && reply[0]?["clientId"]?.GetValue<string>() is { } issued)
+                        session.ClientId = issued;
+
+                    if (!channel.StartsWith("/meta/", StringComparison.Ordinal) && PublishReplyDelay is { } delay && delay > TimeSpan.Zero)
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(delay).ConfigureAwait(false);
+                            await SendAsync(reply).ConfigureAwait(false);
+                        });
+                        continue;
+                    }
+
+                    await SendAsync(reply).ConfigureAwait(false);
+                }
+            }
+        }
+        catch
+        {
+            // Aborted by the test, by the client, or by Dispose.
+        }
+        finally
+        {
+            lock (_sync) { _sockets.Remove(socket); _mutedSockets.Remove(socket); }
+            await pusher.ConfigureAwait(false);
+            socket.Dispose();
         }
     }
 
@@ -611,7 +911,8 @@ public sealed class FakeBayeuxServer : IDisposable
         return reply;
     }
 
-    private JsonArray Handshake(HttpListenerContext ctx, JsonObject request, string? id)
+    /// <param name="ctx">The HTTP exchange, for the session cookie; <c>null</c> over a WebSocket, where the response has long gone.</param>
+    private JsonArray Handshake(HttpListenerContext? ctx, JsonObject request, string? id)
     {
         Interlocked.Increment(ref HandshakeCount);
 
@@ -637,13 +938,13 @@ public sealed class FakeBayeuxServer : IDisposable
         var clientId = "cid-" + Interlocked.Increment(ref _clientSeq);
         _currentClientId = clientId;
 
-        ctx.Response.Headers.Add("Set-Cookie", $"BAYEUX_BROWSER={clientId}-browser; Path=/; HttpOnly");
+        ctx?.Response.Headers.Add("Set-Cookie", $"BAYEUX_BROWSER={clientId}-browser; Path=/; HttpOnly");
 
         var reply = new JsonObject
         {
             ["channel"] = "/meta/handshake",
             ["version"] = "1.0",
-            ["supportedConnectionTypes"] = new JsonArray("long-polling"),
+            ["supportedConnectionTypes"] = WebSocketEnabled && OfferWebSocket ? new JsonArray("long-polling", "websocket") : new JsonArray("long-polling"),
             ["clientId"] = clientId,
             ["successful"] = true,
             ["id"] = id,
@@ -757,7 +1058,11 @@ public sealed class FakeBayeuxServer : IDisposable
     }
 
     /// <param name="scripted">The entry from <see cref="ScriptConnects"/> for this request, if any.</param>
-    private async Task<JsonArray> ConnectAsync(JsonObject request, string? id, int? scripted)
+    /// <param name="webSocket">
+    /// Over a WebSocket: hold for <see cref="WebSocketConnectHold"/> and reply with no events,
+    /// which are pushed on their own.
+    /// </param>
+    private async Task<JsonArray> ConnectAsync(JsonObject request, string? id, int? scripted, bool webSocket)
     {
         if (scripted == 402)
             return Reply402(id);
@@ -820,6 +1125,16 @@ public sealed class FakeBayeuxServer : IDisposable
         // otherwise drain events meant for the new session into a response nobody reads.
         var clientId = request["clientId"]?.GetValue<string>();
         bool IsCurrent() => clientId == _currentClientId;
+
+        if (webSocket)
+        {
+            var until = DateTime.UtcNow + WebSocketConnectHold;
+
+            while (DateTime.UtcNow < until && IsCurrent() && !_cts.IsCancellationRequested)
+                await Task.Delay(25).ConfigureAwait(false);
+
+            return reply;
+        }
 
         // Emulate the long poll: hold briefly, then flush whatever is queued - including, with
         // acknowledgements, anything sent before and not yet confirmed.
@@ -897,6 +1212,7 @@ public sealed class FakeBayeuxServer : IDisposable
     public void Dispose()
     {
         _cts.Cancel();
+        AbortWebSockets();
         try { _listener.Stop(); } catch { /* already stopped */ }
         _listener.Close();
         _cts.Dispose();

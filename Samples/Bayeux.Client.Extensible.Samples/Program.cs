@@ -24,6 +24,8 @@ Console.WriteLine($"""
 
     Operations
       LoggingAndReconnectExample.RunAsync        ILogger, OnError, reconnect with backoff
+      WebSocketExample.RunAsync                  the same session over a WebSocket
+      WebSocketExample.RunAutoAsync              WebSocket, or long-polling where it is blocked
 
     Extensions (ext)
       SalesforceReplayExample.RunAsync           Salesforce replay: resume after a drop or restart
@@ -38,6 +40,8 @@ Console.WriteLine($"""
 // await ChannelsExample.RunAsync(server);
 // await ChannelsExample.RunOverlappingAsync(server);
 // await LoggingAndReconnectExample.RunAsync(server, LoggerFactory.Create(b => b.AddConsole()));
+// await WebSocketExample.RunAsync(server, "service-account", "password");
+// await WebSocketExample.RunAutoAsync(server);
 // await SalesforceReplayExample.RunAsync(
 //     new Uri("https://acme.my.salesforce.com/"), _ => Task.FromResult("the-access-token"),
 //     "/event/Low_Ink__e", "replay-ids.json", TimeSpan.FromMinutes(5));
