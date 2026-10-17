@@ -15,11 +15,11 @@ namespace Bayeux.Client.Extensible.Authentication
     /// <see cref="UpdateCredentials(BasicAuthCredentials)"/>; the change applies to the next
     /// request without restarting the Bayeux session.
     /// </remarks>
-    public class HttpBasicAuthProvider : IAuthProvider<BasicAuthCredentials>
+    public sealed class HttpBasicAuthProvider : IAuthProvider<BasicAuthCredentials>
     {
         // Written by the caller's thread through UpdateCredentials, read by the polling thread
         // in ApplyAsync. volatile is what makes the replacement visible without a lock.
-        private volatile AuthenticationHeaderValue _authHeader;
+        private volatile AuthenticationHeaderValue _basicAuthHeader;
 
         /// <inheritdoc/>
         public event EventHandler<OnCredentialsUpdatedEventArgs>? OnCredentialsUpdated;
@@ -29,7 +29,7 @@ namespace Bayeux.Client.Extensible.Authentication
         /// <exception cref="ArgumentNullException"><paramref name="credentials"/> is <c>null</c>.</exception>
         public HttpBasicAuthProvider(BasicAuthCredentials credentials)
         {
-            _authHeader = GetEncodedValue(credentials);
+            _basicAuthHeader = GetEncodedValue(credentials);
         }
 
         /// <summary>
@@ -40,7 +40,7 @@ namespace Bayeux.Client.Extensible.Authentication
         /// <returns>A completed task.</returns>
         public Task ApplyAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            request.Headers.Authorization = _authHeader;
+            request.Headers.Authorization = _basicAuthHeader;
             return Task.CompletedTask;
         }
 
@@ -57,7 +57,7 @@ namespace Bayeux.Client.Extensible.Authentication
         {
             try
             {
-                _authHeader = GetEncodedValue(credentials);
+                _basicAuthHeader = GetEncodedValue(credentials);
                 OnCredentialsUpdated?.Invoke(this, OnCredentialsUpdatedEventArgs.Create());
             }
             catch (Exception ex)
@@ -70,6 +70,9 @@ namespace Bayeux.Client.Extensible.Authentication
         // and is identical to UTF-8 for ASCII credentials.
         private AuthenticationHeaderValue GetEncodedValue(BasicAuthCredentials credentials)
         {
+            if (credentials is null)
+                throw new ArgumentNullException(nameof(credentials));
+
             return new AuthenticationHeaderValue(
                 "Basic",
                 Convert.ToBase64String(

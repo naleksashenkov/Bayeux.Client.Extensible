@@ -3,6 +3,7 @@
 // See LICENSE in the repository root for full license information.
 
 using System.Text.Json;
+using Bayeux.Client.Extensible.Authentication;
 using Bayeux.Client.Extensible.Core;
 
 namespace Bayeux.Client.Extensible.Samples;

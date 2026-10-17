@@ -53,6 +53,7 @@ public partial class BayeuxClientTests
 
         Assert.Equal(1, server.WebSocketUpgrades);
         Assert.Empty(server.RequestBodiesSnapshot);
+        Assert.Equal(BayeuxTransportType.WebSocket, client.ActiveTransportType);
 
         // It offers both: it can use either.
         Assert.Contains(server.WebSocketFramesSnapshot,
@@ -76,6 +77,7 @@ public partial class BayeuxClientTests
         Assert.True(await WaitForAsync(() => client.State == BayeuxClientState.Connected));
 
         Assert.True(PolledOverHttp(server));
+        Assert.Equal(BayeuxTransportType.LongPolling, client.ActiveTransportType);
 
         // Recovered from, so not reported: an application would otherwise see a fatal transport
         // error from a client that is working fine.
@@ -101,6 +103,7 @@ public partial class BayeuxClientTests
         // over long-polling, opened the session in use.
         Assert.Equal(2, server.HandshakeCount);
         Assert.True(PolledOverHttp(server));
+        Assert.Equal(BayeuxTransportType.LongPolling, client.ActiveTransportType);
         Assert.DoesNotContain(errors, e => e.Source == ErrorSource.Configuration);
         Assert.Empty(errors);
     }
@@ -126,6 +129,7 @@ public partial class BayeuxClientTests
         Assert.True(await WaitForAsync(() => received.Count == 1));
 
         Assert.Equal(2, server.HandshakeCount);
+        Assert.Equal(BayeuxTransportType.LongPolling, client.ActiveTransportType);
         Assert.Empty(errors);
     }
 
@@ -150,6 +154,7 @@ public partial class BayeuxClientTests
 
         Assert.False(PolledOverHttp(server));
         Assert.Equal(1, server.HandshakeCount);
+        Assert.Equal(BayeuxTransportType.WebSocket, client.ActiveTransportType);
     }
 
     [Fact]
@@ -164,9 +169,13 @@ public partial class BayeuxClientTests
         Assert.True(await WaitForAsync(() => PolledOverHttp(server)));
         await client.DisconnectAsync();
 
+        // Stopped, it still names what it last used.
+        Assert.Equal(BayeuxTransportType.LongPolling, client.ActiveTransportType);
+
         // The proxy is fixed; the client is connected again.
         server.WebSocketEnabled = true;
         await client.ConnectAsync();
+        Assert.Equal(BayeuxTransportType.WebSocket, client.ActiveTransportType);
 
         Assert.True(await WaitForAsync(() => ConnectedOverWebSocket(server)));
         server.Publish("/topic/auto", new { n = 1 });
@@ -190,5 +199,33 @@ public partial class BayeuxClientTests
         await client.DisposeAsync();
 
         Assert.True(await WaitForAsync(() => server.OpenWebSocketCount == 0));
+    }
+
+    [Theory]
+    [InlineData(BayeuxTransportType.LongPolling)]
+    [InlineData(BayeuxTransportType.WebSocket)]
+    public void A_fixed_transport_is_the_active_one_from_the_start(BayeuxTransportType transport)
+    {
+        using var server = new FakeBayeuxServer();
+        using var http = server.CreateClient();
+        var options = new BayeuxClientOptions(
+            new Dictionary<string, BayeuxEventHandler>(), "cometd", transportType: transport);
+
+        using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+
+        Assert.Equal(transport, client.ActiveTransportType);
+    }
+
+    [Fact]
+    public void Auto_names_websocket_before_it_has_tried_anything()
+    {
+        using var server = new FakeBayeuxServer();
+        using var http = server.CreateClient();
+        var (options, _) = AutoOptions("/topic/auto");
+
+        using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+
+        // What it will try first; never Auto itself.
+        Assert.Equal(BayeuxTransportType.WebSocket, client.ActiveTransportType);
     }
 }

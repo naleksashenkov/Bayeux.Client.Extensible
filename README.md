@@ -1,5 +1,11 @@
 # Bayeux.Client.Extensible
 
+[![NuGet](https://img.shields.io/nuget/vpre/Bayeux.Client.Extensible?logo=nuget&label=NuGet)](https://www.nuget.org/packages/Bayeux.Client.Extensible)
+[![CI](https://github.com/naleksashenkov/Bayeux.Client.Extensible/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/naleksashenkov/Bayeux.Client.Extensible/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/naleksashenkov/Bayeux.Client.Extensible)](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/LICENSE)
+
+A Bayeux / CometD client for .NET — over WebSocket and long-polling — with authentication built in.
+
 **The existing .NET Bayeux clients don't support authentication.** They implement the protocol — handshake, subscribe, long-poll — and then assume the server will simply talk to you. Real deployments rarely do. One wants HTTP Basic on every request, another a session cookie obtained from a separate login, another a bearer token that expires mid-session. Bolting any of that onto a client with no seam for it means forking it and hoping the handshake still works.
 
 This library adds that seam. Authentication is a first-class concept: an `IAuthProvider` the client consults when it builds each request, so credentials can be attached and replaced at runtime without the protocol layer knowing how they were obtained.
@@ -10,7 +16,19 @@ Everything else is a conforming Bayeux client — over HTTP long-polling or a We
 
 ⚠️ **0.1.0-alpha.** The library is exercised end-to-end both against a scripted Bayeux stub and against the CometD reference servers — the [Java original](https://github.com/cometd/cometd) over long-polling and WebSocket, and its [Node.js port](https://github.com/cometd/cometd-nodejs-server) over long-polling: handshake, subscribe, wildcard delivery, message routing, `402` re-handshake, `reconnect: none`, server-initiated disconnect, cookie isolation between clients, batched subscribe and unsubscribe, partial-batch rollback, reconnect, publishing between clients, acknowledgements. It has **not** yet been run against a production deployment under sustained load.
 
-Implemented today: `BayeuxClient`, `IAuthProvider`, `HttpBasicAuthProvider`, `NoAuthProvider`, wildcard subscriptions, batched subscribe and unsubscribe, publishing, typed data, connection state, `ext` extensions with acknowledgements, opt-in reconnection with backoff and jitter, optional `ILogger`, long-polling and WebSocket transports. Bearer-token, refreshing-token and cookie-session providers, and Salesforce durable replay, are sketched in `Samples/`, not shipped.
+Implemented today: `BayeuxClient`, `IAuthProvider`, `HttpBasicAuthProvider`, `BearerTokenAuthProvider`, `RefreshingTokenAuthProvider`, `ApiKeyAuthProvider`, `DelegateAuthProvider`, `NoAuthProvider`, wildcard subscriptions, batched subscribe and unsubscribe, publishing, typed data, connection state, `ext` extensions with acknowledgements, opt-in reconnection with backoff and jitter, optional `ILogger`, long-polling and WebSocket transports. Salesforce durable replay is sketched in `Samples/`, not shipped.
+
+## Coming from CometD.NetCore2?
+
+[CometD.NetCore2](https://github.com/kdcllc/CometD.NetCore) is the most used Bayeux client for .NET. What this library adds:
+
+- **WebSocket**, and `Auto` — WebSocket where it gets through, long-polling where it does not. CometD.NetCore2 has long-polling only.
+- **Authentication that can change** while the session runs — Basic, bearer, a refreshing OAuth token, API keys, your own — where CometD.NetCore2 fixes the headers when the transport is created.
+- **`async` throughout**: `HttpClient` instead of `HttpWebRequest`, asynchronous handlers with a cancellation token, `ConnectAsync` instead of `Handshake` and `WaitFor`.
+- **Reconnecting** with backoff and jitter that keeps the session across network failures, and subscriptions restored after every new handshake.
+- **System.Text.Json**, with typed data.
+
+What it does not have yet: a shipped Salesforce replay extension (there is a sample) and timesync. The [migration guide](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/migrating-from-cometd-netcore2.md) maps one API onto the other, step by step.
 
 ## Install
 
@@ -95,7 +113,7 @@ new BayeuxClientOptions(channels, "cometd", transportType: BayeuxTransportType.A
 ```
 
 - **It falls back** when the upgrade is refused, when the server does not offer `websocket`, or when the socket carries the handshake but not the first `/meta/connect` — a proxy that lets the upgrade pass and drops the frames after it.
-- **It is not an error.** The client recovers, so nothing reaches `OnError`; the fallback is logged as a warning.
+- **It is not an error.** The client recovers, so nothing reaches `OnError`; the fallback is logged as a warning, and `ActiveTransportType` tells which transport is in use — for a health check or a metric.
 - **Once WebSocket has worked, it stays.** After the first answered `/meta/connect` a dropped socket is a network failure, reconnected like any other — not a reason to switch.
 - **Each `ConnectAsync` tries WebSocket again**, so a proxy fixed meanwhile is noticed on restart.
 - **Both transports' rules apply**: `UseCookies = false`, and an `HttpClient.Timeout` longer than the server's hold, since the client may end up on long-polling.
@@ -114,6 +132,18 @@ The dependency is `Microsoft.Extensions.Logging.Abstractions`, referenced at a d
 
 ## Authentication
 
+| You have | Use |
+|---|---|
+| A server that needs no authentication | `NoAuthProvider.Instance` |
+| A session from a login elsewhere, as a cookie | `NoAuthProvider.Instance` and your own `CookieContainer` |
+| A user name and password | `HttpBasicAuthProvider` |
+| An API key from a gateway | `ApiKeyAuthProvider` |
+| A token you obtain and replace yourself | `BearerTokenAuthProvider` |
+| An OAuth token that expires — MSAL, client credentials, Salesforce | `RefreshingTokenAuthProvider` |
+| Something of your own — a header, several providers at once | `DelegateAuthProvider` |
+| Something that keeps state — a signature, a cache | your own `IAuthProvider` |
+| Digest, NTLM, Kerberos, a client certificate | `Credentials` or `ClientCertificates` on the `HttpClientHandler` — long-polling only |
+
 **HTTP Basic** — credentials can be replaced at any time, with no reconnect:
 
 ```csharp
@@ -123,24 +153,87 @@ var auth = new HttpBasicAuthProvider(new BasicAuthCredentials("svc", password));
 auth.UpdateCredentials(new BasicAuthCredentials("svc", newPassword));
 ```
 
+**Bearer token** — OAuth 2.0 access tokens and the like. The provider does not refresh anything: replace the token before it expires, or from `ReconnectOptions.BeforeAttemptAsync` after the server refused it:
+
+```csharp
+var auth = new BearerTokenAuthProvider(accessToken);   // the token alone, without "Bearer "
+
+auth.UpdateCredentials(newAccessToken);
+```
+
+**Refreshing token** — for a token that expires. Give it a way to obtain one; it fetches on the first request, renews ahead of expiry, and calls your source once however many requests need a token at the same moment:
+
+```csharp
+var auth = new RefreshingTokenAuthProvider(async ct =>
+{
+    var result = await msal.AcquireTokenForClient(scopes).ExecuteAsync(ct);
+    return new AccessToken(result.AccessToken, result.ExpiresOn);
+});
+```
+
+- **Renewed a minute ahead**, or at half the token's life if that is shorter, so a short-lived token does not send every request to the token server.
+- **A failed renewal is not an outage** while the token in hand is still valid: it is sent, and the failure reported through `OnCredentialsUpdated`. Only once it has expired does a failure reach the request — and the client's reconnect policy.
+- **A token revoked early** — Salesforce reports it as `401::Authentication invalid` — is dropped with `Invalidate()`, and the next attempt fetches a new one:
+
+```csharp
+client.OnError += (_, e) =>
+{
+    if (e.Error is BayeuxConnectException { Error: "401::Authentication invalid" })
+        auth.Invalidate();
+};
+
+var reconnect = new ReconnectOptions(shouldRetry: e =>
+    e is BayeuxConnectException { Error: "401::Authentication invalid" } || ReconnectOptions.IsRetriable(e));
+```
+
+**API key** — in a header of its own, `X-API-Key` unless the server wants another name:
+
+```csharp
+var auth = new ApiKeyAuthProvider(new ApiKeyCredentials(key, "Ocp-Apim-Subscription-Key"));
+```
+
+Credentials are checked when they are created, not when they are sent: a header name `HttpClient` would drop, a key with a line break, a token passed with its `Bearer ` scheme, a user name with a `:` in it are refused right there. `UpdateCredentials` never throws — what it refuses it reports through `OnCredentialsUpdated`, and the credentials in use stay.
+
+Over a WebSocket, credentials go out once per socket, in the upgrade request: a replacement reaches the server with the next socket. Schemes that live in the `HttpClient`'s handler rather than in headers — Digest, NTLM, Kerberos, client certificates — work over long-polling only.
+
 **None** — for servers that need no authentication, and for deployments where a login elsewhere established the session and the cookie is carried in the `CookieContainer` you pass to the constructor:
 
 ```csharp
 var auth = NoAuthProvider.Instance;
 ```
 
-**Custom** — one method, called before every request including the handshake:
+**Delegate** — a provider in one lambda, for a header the others do not set, or several providers at once:
 
 ```csharp
-public sealed class ApiKeyAuthProvider : IAuthProvider
-{
-    private readonly string _key;
+var auth = new DelegateAuthProvider(request => request.Headers.Add("X-Tenant", tenantId));
 
-    public ApiKeyAuthProvider(string key) => _key = key;
+var both = new DelegateAuthProvider(async (request, ct) =>
+{
+    await gatewayKey.ApplyAsync(request, ct);
+    await userToken.ApplyAsync(request, ct);
+});
+```
+
+**Custom** — one method, called before every request including the handshake. This one signs each request with a shared secret, which none of the built-in providers does:
+
+```csharp
+public sealed class SignedRequestAuthProvider : IAuthProvider
+{
+    private readonly string _keyId;
+    private readonly byte[] _secret;
+
+    public SignedRequestAuthProvider(string keyId, byte[] secret) => (_keyId, _secret) = (keyId, secret);
 
     public Task ApplyAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        request.Headers.TryAddWithoutValidation("X-API-Key", _key);
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+
+        using var hmac = new HMACSHA256(_secret);
+        var signature = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(_keyId + ":" + timestamp)));
+
+        request.Headers.TryAddWithoutValidation("X-Key-Id", _keyId);
+        request.Headers.TryAddWithoutValidation("X-Timestamp", timestamp);
+        request.Headers.TryAddWithoutValidation("X-Signature", signature);
         return Task.CompletedTask;
     }
 }
@@ -462,6 +555,6 @@ Written from the [Bayeux protocol specification](https://docs.cometd.org/current
 
 ## Licence
 
-Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache License 2.0 — see [LICENSE](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/LICENSE) and [NOTICE](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/NOTICE).
 
-Contributions require a Developer Certificate of Origin sign-off; see [CONTRIBUTING.md](CONTRIBUTING.md) and [DCO](DCO).
+Contributions require a Developer Certificate of Origin sign-off; see [CONTRIBUTING.md](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/CONTRIBUTING.md) and [DCO](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/DCO).

@@ -10,7 +10,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.Net.WebSockets;
 
 namespace Bayeux.Client.Extensible.Core
@@ -168,6 +167,11 @@ namespace Bayeux.Client.Extensible.Core
 
         /// <inheritdoc/>
         public BayeuxClientState State => (BayeuxClientState)Volatile.Read(ref _stateCode);
+
+        /// <inheritdoc/>
+        public BayeuxTransportType ActiveTransportType => _transport is WebSocketTransport
+            ? BayeuxTransportType.WebSocket 
+            : BayeuxTransportType.LongPolling;
 
         /// <summary>Creates a client for one Bayeux session.</summary>
         /// <param name="httpClient">

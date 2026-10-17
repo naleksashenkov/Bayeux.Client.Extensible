@@ -26,10 +26,21 @@ tag `vx.y.z`. The release workflow refuses to publish a version that has no sect
 - `BayeuxTransportType.Auto`: WebSocket where it gets through, long-polling where the upgrade is
   refused, the server does not offer it, or the socket carries the handshake but not the first
   connect. The fallback is logged, not reported through `OnError`; once WebSocket has carried a
-  connect it is kept, and each `ConnectAsync` tries it again.
+  connect it is kept, and each `ConnectAsync` tries it again. `IBayeuxClient.ActiveTransportType`
+  tells which transport is in use.
 - `IAuthProvider`, consulted before every request including the handshake, so credentials can be
   attached and replaced at runtime without the protocol layer knowing where they came from.
-- `HttpBasicAuthProvider` with in-place credential replacement, and `NoAuthProvider`.
+- `HttpBasicAuthProvider`, `BearerTokenAuthProvider` and `ApiKeyAuthProvider` (a header of the
+  server's choosing, `X-API-Key` by default), all with in-place credential replacement; and
+  `NoAuthProvider`. Credentials are immutable and checked when created: a header `HttpClient`
+  would drop, a line break, a token with its `Bearer ` scheme, a `:` in a Basic user name are
+  refused up front. `UpdateCredentials` never throws; what it refuses it reports, and the
+  credentials in use stay.
+- `RefreshingTokenAuthProvider`: a bearer token obtained from a source you supply and renewed
+  ahead of expiry - one fetch however many requests need it at once, the token in hand kept while
+  it is valid if renewal fails, `Invalidate()` for a token revoked early.
+- `DelegateAuthProvider`: a provider in one lambda, synchronous or asynchronous - including
+  several providers applied in turn.
 - Asynchronous handlers: a `BayeuxEventHandler` receives a `BayeuxEvent` - the concrete channel,
   the data and any `ext` - with a cancellation token, and is awaited before the next long poll
   (over a WebSocket, before the next event). Its exceptions are reported as `ErrorSource.Handler`

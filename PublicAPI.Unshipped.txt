@@ -1,10 +1,37 @@
 #nullable enable
+Bayeux.Client.Extensible.Core.BayeuxClient.ActiveTransportType.get -> Bayeux.Client.Extensible.Core.BayeuxTransportType
+Bayeux.Client.Extensible.Core.IBayeuxClient.ActiveTransportType.get -> Bayeux.Client.Extensible.Core.BayeuxTransportType
+Bayeux.Client.Extensible.Authentication.DelegateAuthProvider
+Bayeux.Client.Extensible.Authentication.DelegateAuthProvider.ApplyAsync(System.Net.Http.HttpRequestMessage! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Authentication.DelegateAuthProvider.DelegateAuthProvider(System.Action<System.Net.Http.HttpRequestMessage!>! apply) -> void
+Bayeux.Client.Extensible.Authentication.DelegateAuthProvider.DelegateAuthProvider(System.Func<System.Net.Http.HttpRequestMessage!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>! apply) -> void
+Bayeux.Client.Extensible.Authentication.AccessToken
+Bayeux.Client.Extensible.Authentication.AccessToken.AccessToken(string! token, System.DateTimeOffset expiresAt) -> void
+Bayeux.Client.Extensible.Authentication.AccessToken.ExpiresAt.get -> System.DateTimeOffset
+Bayeux.Client.Extensible.Authentication.AccessToken.Token.get -> string!
+Bayeux.Client.Extensible.Authentication.RefreshingTokenAuthProvider
+Bayeux.Client.Extensible.Authentication.RefreshingTokenAuthProvider.ApplyAsync(System.Net.Http.HttpRequestMessage! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Authentication.RefreshingTokenAuthProvider.Invalidate() -> void
+Bayeux.Client.Extensible.Authentication.RefreshingTokenAuthProvider.OnCredentialsUpdated -> System.EventHandler<Bayeux.Client.Extensible.Authentication.OnCredentialsUpdatedEventArgs!>?
+Bayeux.Client.Extensible.Authentication.RefreshingTokenAuthProvider.RefreshingTokenAuthProvider(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<Bayeux.Client.Extensible.Authentication.AccessToken!>!>! getFreshToken, System.TimeSpan? refreshBefore = null) -> void
+Bayeux.Client.Extensible.Authentication.ApiKeyAuthProvider
+Bayeux.Client.Extensible.Authentication.ApiKeyAuthProvider.ApiKeyAuthProvider(Bayeux.Client.Extensible.Authentication.ApiKeyCredentials! credentials) -> void
+Bayeux.Client.Extensible.Authentication.ApiKeyAuthProvider.ApplyAsync(System.Net.Http.HttpRequestMessage! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Authentication.ApiKeyAuthProvider.OnCredentialsUpdated -> System.EventHandler<Bayeux.Client.Extensible.Authentication.OnCredentialsUpdatedEventArgs!>?
+Bayeux.Client.Extensible.Authentication.ApiKeyAuthProvider.UpdateCredentials(Bayeux.Client.Extensible.Authentication.ApiKeyCredentials! credentials) -> void
+Bayeux.Client.Extensible.Authentication.ApiKeyCredentials
+Bayeux.Client.Extensible.Authentication.ApiKeyCredentials.ApiKey.get -> string!
+Bayeux.Client.Extensible.Authentication.ApiKeyCredentials.ApiKeyCredentials(string! apiKey, string! headerName = "X-API-Key") -> void
+Bayeux.Client.Extensible.Authentication.ApiKeyCredentials.HeaderName.get -> string!
+Bayeux.Client.Extensible.Authentication.BearerTokenAuthProvider
+Bayeux.Client.Extensible.Authentication.BearerTokenAuthProvider.ApplyAsync(System.Net.Http.HttpRequestMessage! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Authentication.BearerTokenAuthProvider.BearerTokenAuthProvider(string! bearerToken) -> void
+Bayeux.Client.Extensible.Authentication.BearerTokenAuthProvider.OnCredentialsUpdated -> System.EventHandler<Bayeux.Client.Extensible.Authentication.OnCredentialsUpdatedEventArgs!>?
+Bayeux.Client.Extensible.Authentication.BearerTokenAuthProvider.UpdateCredentials(string! bearerToken) -> void
 Bayeux.Client.Extensible.Authentication.BasicAuthCredentials
 Bayeux.Client.Extensible.Authentication.BasicAuthCredentials.BasicAuthCredentials(string! login, string! password) -> void
 Bayeux.Client.Extensible.Authentication.BasicAuthCredentials.Login.get -> string!
-Bayeux.Client.Extensible.Authentication.BasicAuthCredentials.Login.set -> void
 Bayeux.Client.Extensible.Authentication.BasicAuthCredentials.Password.get -> string!
-Bayeux.Client.Extensible.Authentication.BasicAuthCredentials.Password.set -> void
 Bayeux.Client.Extensible.Authentication.HttpBasicAuthProvider
 Bayeux.Client.Extensible.Authentication.HttpBasicAuthProvider.ApplyAsync(System.Net.Http.HttpRequestMessage! request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 Bayeux.Client.Extensible.Authentication.HttpBasicAuthProvider.HttpBasicAuthProvider(Bayeux.Client.Extensible.Authentication.BasicAuthCredentials! credentials) -> void

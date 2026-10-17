@@ -16,7 +16,11 @@ Console.WriteLine($"""
       BasicAuthExample.RunAsync                  HTTP Basic, with credential rotation
       NoAuthExample.RunOpenServerAsync           no authentication
       NoAuthExample.RunInheritedSessionAsync     session cookie from an application login
-      CustomAuthExample.RunAsync                 custom provider: API key or bearer token
+      CustomAuthExample.RunAsync                 bearer token, refreshed before it expires
+      CustomAuthExample.RunRefreshingAsync       a token renewed by the provider, dropped when revoked
+      CustomAuthExample.RunApiKeyAsync           API key in a header of the gateway's choosing
+      CustomAuthExample.RunDelegateAsync         a provider in one lambda: gateway key + user token
+      CustomAuthExample.RunSignedAsync           a provider of your own: signed requests
 
     Channels
       ChannelsExample.RunAsync                   wildcards, runtime subscribe, unsubscribe
@@ -37,6 +41,11 @@ Console.WriteLine($"""
 // await NoAuthExample.RunOpenServerAsync(server);
 // await NoAuthExample.RunInheritedSessionAsync(server, "the-session-cookie");
 // await CustomAuthExample.RunAsync(server, _ => Task.FromResult("the-token"));
+// await CustomAuthExample.RunRefreshingAsync(server,
+//     _ => Task.FromResult(new AccessToken("the-token", DateTimeOffset.UtcNow.AddHours(1))));
+// await CustomAuthExample.RunApiKeyAsync(server, "the-api-key");
+// await CustomAuthExample.RunDelegateAsync(server, "gateway-key", "user-token", "acme");
+// await CustomAuthExample.RunSignedAsync(server, "key-1", System.Text.Encoding.UTF8.GetBytes("the-shared-secret"));
 // await ChannelsExample.RunAsync(server);
 // await ChannelsExample.RunOverlappingAsync(server);
 // await LoggingAndReconnectExample.RunAsync(server, LoggerFactory.Create(b => b.AddConsole()));

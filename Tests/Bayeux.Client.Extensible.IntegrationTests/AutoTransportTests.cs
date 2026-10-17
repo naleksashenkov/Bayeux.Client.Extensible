@@ -6,7 +6,6 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Bayeux.Client.Extensible.Authentication;
 using Bayeux.Client.Extensible.Core;
-using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Bayeux.Client.Extensible.IntegrationTests;
@@ -17,29 +16,13 @@ namespace Bayeux.Client.Extensible.IntegrationTests;
 /// and the Node.js server, which has no WebSocket at all.
 /// </summary>
 /// <remarks>
-/// Whether the client fell back is read from its log, the one trace the fallback leaves. Each
-/// client publishes to a channel it is subscribed to and waits for its own message, which needs
-/// nothing from the control plane - <c>/cometd-lp</c> has none.
+/// Each client publishes to a channel it is subscribed to and waits for its own message, which
+/// needs nothing from the control plane - <c>/cometd-lp</c> has none.
 /// </remarks>
 [Collection(RealCometDTests.Collection)]
 public sealed class AutoTransportTests
 {
-    private sealed class RecordingLogger : ILogger<BayeuxClient>
-    {
-        public ConcurrentQueue<string> Warnings { get; } = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel == LogLevel.Warning)
-                Warnings.Enqueue(formatter(state, exception));
-        }
-    }
-
-    private static async Task<(bool fellBack, string? text)> RunAutoAsync(string variable, string path)
+    private static async Task<(BayeuxTransportType transport, string? text)> RunAutoAsync(string variable, string path)
     {
         var url = Environment.GetEnvironmentVariable(variable);
         Skip.If(string.IsNullOrEmpty(url), $"{variable} is not set.");
@@ -52,7 +35,6 @@ public sealed class AutoTransportTests
 
         var received = new ConcurrentQueue<JsonElement>();
         var errors = new ConcurrentQueue<BayeuxErrorEventArgs>();
-        var logger = new RecordingLogger();
 
         var options = new BayeuxClientOptions(
             new Dictionary<string, BayeuxEventHandler>
@@ -62,7 +44,7 @@ public sealed class AutoTransportTests
             path,
             transportType: BayeuxTransportType.Auto);
 
-        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { }, logger: logger);
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
         client.OnError += (_, e) => errors.Enqueue(e);
         await client.ConnectAsync();
 
@@ -76,34 +58,33 @@ public sealed class AutoTransportTests
         Assert.False(received.IsEmpty);
         Assert.Empty(errors);
 
-        var fallback = logger.Warnings.FirstOrDefault(w => w.Contains("long", StringComparison.OrdinalIgnoreCase));
-        return (fallback is not null, received.TryPeek(out var data) ? data.GetProperty("text").GetString() : null);
+        return (client.ActiveTransportType, received.TryPeek(out var data) ? data.GetProperty("text").GetString() : null);
     }
 
     [SkippableFact]
     public async Task Auto_stays_on_websocket_with_the_java_server()
     {
-        var (fellBack, text) = await RunAutoAsync("BAYEUX_COMETD_JAVA_URL", "cometd");
+        var (transport, text) = await RunAutoAsync("BAYEUX_COMETD_JAVA_URL", "cometd");
 
-        Assert.False(fellBack);
+        Assert.Equal(BayeuxTransportType.WebSocket, transport);
         Assert.Equal("auto", text);
     }
 
     [SkippableFact]
     public async Task Auto_falls_back_where_the_java_server_refuses_the_upgrade()
     {
-        var (fellBack, text) = await RunAutoAsync("BAYEUX_COMETD_JAVA_URL", "cometd-lp");
+        var (transport, text) = await RunAutoAsync("BAYEUX_COMETD_JAVA_URL", "cometd-lp");
 
-        Assert.True(fellBack);
+        Assert.Equal(BayeuxTransportType.LongPolling, transport);
         Assert.Equal("auto", text);
     }
 
     [SkippableFact]
     public async Task Auto_falls_back_with_the_node_server_which_has_no_websocket()
     {
-        var (fellBack, text) = await RunAutoAsync("BAYEUX_COMETD_URL", "cometd");
+        var (transport, text) = await RunAutoAsync("BAYEUX_COMETD_URL", "cometd");
 
-        Assert.True(fellBack);
+        Assert.Equal(BayeuxTransportType.LongPolling, transport);
         Assert.Equal("auto", text);
     }
 }

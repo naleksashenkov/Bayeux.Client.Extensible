@@ -37,6 +37,19 @@ namespace Bayeux.Client.Extensible.Core
         bool IsDestroyed { get; }
 
         /// <summary>
+        /// The transport the client uses right now: <see cref="BayeuxTransportType.WebSocket"/> or
+        /// <see cref="BayeuxTransportType.LongPolling"/>, never <see cref="BayeuxTransportType.Auto"/>.
+        /// </summary>
+        /// <remarks>
+        /// With a fixed transport, the one configured. With <see cref="BayeuxTransportType.Auto"/>,
+        /// what the client settled on: WebSocket until it fails to get through, long-polling after -
+        /// for a health check or a metric, which the fallback otherwise only shows in the log. Each
+        /// <see cref="ConnectAsync"/> tries WebSocket again, so it reads WebSocket from that call on
+        /// until the client falls back once more.
+        /// </remarks>
+        BayeuxTransportType ActiveTransportType { get; }
+
+        /// <summary>
         /// The Bayeux session id of the established session, or an empty string when there is none.
         /// </summary>
         /// <remarks>

@@ -13,8 +13,9 @@
     <Version>0.1.0-alpha</Version>
     <Authors>Nikita Aleksashenkov</Authors>
     <Copyright>Copyright (c) 2026 Nikita Aleksashenkov</Copyright>
-    <Description>A .NET Bayeux (CometD) long-polling client with pluggable authentication. Written from the Bayeux protocol specification.</Description>
-    <PackageTags>bayeux;cometd;long-polling;push;streaming;authentication</PackageTags>
+    <Title>Bayeux / CometD client for .NET</Title>
+    <Description>A .NET Bayeux (CometD) client over WebSocket and long-polling, with pluggable authentication: Basic, bearer and refreshing OAuth tokens, API keys, or your own. Reconnects with backoff, keeps the session across network failures, falls back from WebSocket where it is blocked. Works with CometD servers and the Salesforce Streaming API. Written from the Bayeux protocol specification.</Description>
+    <PackageTags>bayeux;cometd;websocket;long-polling;push;streaming;pubsub;salesforce;platform-events;oauth;authentication</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://github.com/naleksashenkov/Bayeux.Client.Extensible</PackageProjectUrl>

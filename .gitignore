@@ -32,3 +32,4 @@ Thumbs.db
 
 # The Java reference server's Maven output
 Tests/cometd-java-server/target/
+Tests/cometd-server/node_modules/

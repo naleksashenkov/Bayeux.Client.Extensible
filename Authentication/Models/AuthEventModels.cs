@@ -9,7 +9,7 @@ namespace Bayeux.Client.Extensible.Authentication
     /// This describes only whether the provider could encode the new credentials locally. Whether
     /// the server accepts them is not known until the next request is answered.
     /// </remarks>
-    public class OnCredentialsUpdatedEventArgs : EventArgs
+    public sealed class OnCredentialsUpdatedEventArgs : EventArgs
     {
         /// <summary>Whether the credentials were replaced.</summary>
         public bool IsSuccess { get; }
