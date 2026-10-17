@@ -57,7 +57,7 @@ await using var client = new BayeuxClient(
 ```
 
 - **`UseCookies = false` is required**: the client keeps each session's cookies itself, so several
-  clients can share one `HttpClient`. See [The HttpClient contract](https://github.com/naleksashenkov/Bayeux.Client.Extensible#the-httpclient-contract).
+  clients can share one `HttpClient`. See [The HttpClient contract](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/transports.md#the-httpclient-contract).
 - **A token that expires** no longer means rebuilding the transport: `auth.UpdateCredentials(newToken)`,
   or `RefreshingTokenAuthProvider` to renew it without your code.
 - **Cookies** set with `SetCookie` go in a `CookieContainer` passed to the constructor instead.
@@ -111,7 +111,7 @@ var channels = new Dictionary<string, BayeuxEventHandler>
   Names are camelCase by default (`JsonSerializerDefaults.Web`); pass your own
   `JsonSerializerOptions` in the options to change it.
 - A handler is awaited before the next poll. Long work belongs in a queue of your own; see
-  [Handlers](https://github.com/naleksashenkov/Bayeux.Client.Extensible#handlers).
+  [Handlers](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/handlers-and-channels.md#handlers).
 
 ### Unsubscribing and publishing
 
@@ -153,7 +153,7 @@ new BayeuxClientOptions(channels, "cometd/59.0", reconnectOptions: new Reconnect
 
 It retries with growing, randomised delays, keeps the session across network failures — so nothing
 queued on the server is lost — and never retries a refused login. See
-[Reconnecting](https://github.com/naleksashenkov/Bayeux.Client.Extensible#reconnecting).
+[Reconnecting](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/reconnecting.md#reconnecting).
 
 ### Disconnecting
 
@@ -176,4 +176,4 @@ new BayeuxClientOptions(channels, path, transportType: BayeuxTransportType.Auto)
 
 `Auto` uses WebSocket where it gets through and long-polling where a proxy or the server blocks it.
 Salesforce offers long-polling only. See
-[Transports](https://github.com/naleksashenkov/Bayeux.Client.Extensible#transports).
+[Transports](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/transports.md#transports).
