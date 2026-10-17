@@ -5,10 +5,16 @@ upgrading, not every commit. The format follows [Keep a Changelog](https://keepa
 and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **Releasing:** rename the `Unreleased` heading below to `## [x.y.z] - YYYY-MM-DD`, add a fresh empty
-`Unreleased` above it, move `PublicAPI.Unshipped.txt` into `PublicAPI.Shipped.txt`, then push the
-tag `vx.y.z`. The release workflow refuses to publish a version that has no section here.
+`Unreleased` above it, then push the tag `vx.y.z`. The release workflow refuses to publish a version
+that has no section here. For a stable version only, move `PublicAPI.Unshipped.txt` into
+`PublicAPI.Shipped.txt` first: until then the API may still change, which is what a prerelease -
+`x.y.z-alpha.n`, `-beta.n`, `-rc.n` - is for.
 
 ## [Unreleased]
+
+## [1.0.0-alpha.1] - 2026-10-17
+
+The first public release: the API may still change before 1.0.
 
 ### Added
 
@@ -88,6 +94,10 @@ tag `vx.y.z`. The release workflow refuses to publish a version that has no sect
 - `BayeuxAckExtension`: the acknowledge extension. The server keeps events until the client
   confirms them and sends them again if a reply was lost, making delivery at-least-once within a
   session. Confirmation follows the handlers, so acknowledged means handled.
+- `BayeuxTimesyncExtension`: the server's clock offset and the network lag, from CometD's timesync
+  extension - the hold of a long poll kept out of the lag, averaged over the latest samples,
+  `ServerTime` for the server's now. A server without it, or an answer that cannot be read, leaves
+  the estimates at zero and the session untouched.
 - `BayeuxHttpException`, carrying the HTTP status on every target framework, and
   `BayeuxHandshakeException` and `BayeuxConnectException`, carrying the server's error, reconnect
   advice and `ext`. A connect the server *refuses* with advice `none` now ends the session as
@@ -103,4 +113,5 @@ tag `vx.y.z`. The release workflow refuses to publish a version that has no sect
 - A session that ends - by expiry or a new handshake - loses whatever was still queued for it on
   the server, with or without acknowledgements.
 
-[Unreleased]: https://github.com/naleksashenkov/Bayeux.Client.Extensible/commits/main
+[Unreleased]: https://github.com/naleksashenkov/Bayeux.Client.Extensible/compare/v1.0.0-alpha.1...HEAD
+[1.0.0-alpha.1]: https://github.com/naleksashenkov/Bayeux.Client.Extensible/releases/tag/v1.0.0-alpha.1

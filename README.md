@@ -1,5 +1,7 @@
 # Bayeux.Client.Extensible
 
+![Bayeux.Client.Extensible — a swallow carrying a key toward a keyhole star](https://raw.githubusercontent.com/naleksashenkov/Bayeux.Client.Extensible/main/assets/logo-128.png)
+
 [![NuGet](https://img.shields.io/nuget/vpre/Bayeux.Client.Extensible?logo=nuget&label=NuGet)](https://www.nuget.org/packages/Bayeux.Client.Extensible)
 [![CI](https://github.com/naleksashenkov/Bayeux.Client.Extensible/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/naleksashenkov/Bayeux.Client.Extensible/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/naleksashenkov/Bayeux.Client.Extensible)](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/LICENSE)
@@ -14,9 +16,9 @@ Everything else is a conforming Bayeux client — over HTTP long-polling or a We
 
 ## Status
 
-⚠️ **0.1.0-alpha.** The library is exercised end-to-end both against a scripted Bayeux stub and against the CometD reference servers — the [Java original](https://github.com/cometd/cometd) over long-polling and WebSocket, and its [Node.js port](https://github.com/cometd/cometd-nodejs-server) over long-polling: handshake, subscribe, wildcard delivery, message routing, `402` re-handshake, `reconnect: none`, server-initiated disconnect, cookie isolation between clients, batched subscribe and unsubscribe, partial-batch rollback, reconnect, publishing between clients, acknowledgements. It has **not** yet been run against a production deployment under sustained load.
+⚠️ **1.0.0-alpha.1 — the API may still change before 1.0.** The library is exercised end-to-end both against a scripted Bayeux stub and against the CometD reference servers — the [Java original](https://github.com/cometd/cometd) over long-polling and WebSocket, and its [Node.js port](https://github.com/cometd/cometd-nodejs-server) over long-polling: handshake, subscribe, wildcard delivery, message routing, `402` re-handshake, `reconnect: none`, server-initiated disconnect, cookie isolation between clients, batched subscribe and unsubscribe, partial-batch rollback, reconnect, publishing between clients, acknowledgements. It has **not** yet been run against a production deployment under sustained load.
 
-Implemented today: `BayeuxClient`, `IAuthProvider`, `HttpBasicAuthProvider`, `BearerTokenAuthProvider`, `RefreshingTokenAuthProvider`, `ApiKeyAuthProvider`, `DelegateAuthProvider`, `NoAuthProvider`, wildcard subscriptions, batched subscribe and unsubscribe, publishing, typed data, connection state, `ext` extensions with acknowledgements, opt-in reconnection with backoff and jitter, optional `ILogger`, long-polling and WebSocket transports. Salesforce durable replay is sketched in `Samples/`, not shipped.
+Implemented today: `BayeuxClient`, `IAuthProvider`, `HttpBasicAuthProvider`, `BearerTokenAuthProvider`, `RefreshingTokenAuthProvider`, `ApiKeyAuthProvider`, `DelegateAuthProvider`, `NoAuthProvider`, wildcard subscriptions, batched subscribe and unsubscribe, publishing, typed data, connection state, `ext` extensions with acknowledgements and timesync, opt-in reconnection with backoff and jitter, optional `ILogger`, long-polling and WebSocket transports. Salesforce durable replay is sketched in `Samples/`, not shipped.
 
 ## Coming from CometD.NetCore2?
 
@@ -28,13 +30,15 @@ Implemented today: `BayeuxClient`, `IAuthProvider`, `HttpBasicAuthProvider`, `Be
 - **Reconnecting** with backoff and jitter that keeps the session across network failures, and subscriptions restored after every new handshake.
 - **System.Text.Json**, with typed data.
 
-What it does not have yet: a shipped Salesforce replay extension (there is a sample) and timesync. The [migration guide](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/migrating-from-cometd-netcore2.md) maps one API onto the other, step by step.
+What it does not have yet: a shipped Salesforce replay extension (there is a sample). The [migration guide](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/migrating-from-cometd-netcore2.md) maps one API onto the other, step by step.
 
 ## Install
 
 ```bash
-dotnet add package Bayeux.Client.Extensible
+dotnet add package Bayeux.Client.Extensible --prerelease
 ```
+
+`--prerelease` while the package is in alpha: without it `dotnet add package` looks for a stable version, and there is none yet.
 
 Targets **net10.0**, **netstandard2.0** and **net472** — so .NET 5 through 10, .NET Core 2.0+, and .NET Framework 4.6.1+ can all consume it.
 
@@ -548,6 +552,22 @@ The server numbers each reply that carries events; the next `/meta/connect` tell
 - **Acknowledged means handled.** The confirmation goes out with the next connect, which the client sends only after every handler for the previous events has returned.
 - **At-least-once within a session.** An event can arrive twice — its reply arrived, but the confirmation did not — so handlers should tolerate duplicates. A session that ends, by expiry or a new handshake, still loses its queue.
 - **The server must support it.** `IsAckSupported` says whether it agreed in the last handshake; a server that did not sees nothing different. With acknowledgements on, CometD delivers events only in `/meta/connect` replies.
+
+## Timesync
+
+How far the server's clock is from this machine's, and how long a message takes on the network — for an application that acts on the server's time:
+
+```csharp
+var timesync = new BayeuxTimesyncExtension();
+
+new BayeuxClientOptions(channels, "cometd", extensions: [timesync]);
+
+var serverNow = timesync.ServerTime;   // this machine's time, corrected by timesync.Offset
+```
+
+- **Every handshake and connect carries the client's clock**, and the server answers with its own and how long it held the message. The hold is left out of the network delay, so a `/meta/connect` held for the server's whole timeout does not pass for a slow network.
+- **Averaged** over the last ten samples by default — `new BayeuxTimesyncExtension(maxSamples: 20)` for more.
+- **The server must support it** — CometD's `TimesyncExtension`. Until it has answered, `IsTimesyncSupported` is `false`, `Offset` and `Lag` are zero, and `ServerTime` is the local time. A reply it cannot read is skipped, not reported.
 
 ## Protocol provenance
 

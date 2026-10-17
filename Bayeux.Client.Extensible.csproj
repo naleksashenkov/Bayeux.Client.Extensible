@@ -10,7 +10,7 @@
 
   <PropertyGroup>
     <PackageId>Bayeux.Client.Extensible</PackageId>
-    <Version>0.1.0-alpha</Version>
+    <Version>1.0.0-alpha.1</Version>
     <Authors>Nikita Aleksashenkov</Authors>
     <Copyright>Copyright (c) 2026 Nikita Aleksashenkov</Copyright>
     <Title>Bayeux / CometD client for .NET</Title>
@@ -18,6 +18,7 @@
     <PackageTags>bayeux;cometd;websocket;long-polling;push;streaming;pubsub;salesforce;platform-events;oauth;authentication</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <PackageProjectUrl>https://github.com/naleksashenkov/Bayeux.Client.Extensible</PackageProjectUrl>
     <RepositoryUrl>https://github.com/naleksashenkov/Bayeux.Client.Extensible</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -39,6 +40,8 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- The source is assets/icon.svg; the PNG is what NuGet shows. -->
+    <None Include="assets/icon.png" Pack="true" PackagePath="\" />
     <None Include="NOTICE" Pack="true" PackagePath="\" />
     <None Include="CHANGELOG.md" Pack="true" PackagePath="\" />
   </ItemGroup>

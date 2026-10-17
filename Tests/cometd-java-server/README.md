@@ -11,7 +11,7 @@ both. Test infrastructure only - nothing here is part of the library or its pack
 | `/control/publish?channel=…&text=…` | publishes to a channel of `/cometd` |
 | `/control/kill?clientId=…` | ends a session of `/cometd` from the server's side |
 
-Timeouts are short, as in the Node.js server: a `/meta/connect` is held for 2 seconds, and a
+Acknowledgements and timesync are on, for clients that ask for them. Timeouts are short, as in the Node.js server: a `/meta/connect` is held for 2 seconds, and a
 session expires 4 seconds after its last one. CometD 8 on Jetty 12; needs Java 17 or later.
 
 ## Run

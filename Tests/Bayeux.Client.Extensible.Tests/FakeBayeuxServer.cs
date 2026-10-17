@@ -269,6 +269,60 @@ public sealed class FakeBayeuxServer : IDisposable
             foreach (var channel in channels) _rejectedUnsubscriptions.Add(channel);
     }
 
+    // ---- timesync ------------------------------------------------------------------------------
+
+    private bool _timesyncEnabled;
+    private TimeSpan _serverClockOffset;
+    private string? _timesyncReplyOverride;
+
+    /// <summary>
+    /// Whether this server answers the timesync extension, as CometD's <c>TimesyncExtension</c>
+    /// does: on handshake and connect replies, when the request carried one. Off by default.
+    /// </summary>
+    public bool TimesyncEnabled
+    {
+        get { lock (_sync) return _timesyncEnabled; }
+        set { lock (_sync) _timesyncEnabled = value; }
+    }
+
+    /// <summary>How far this server's clock is ahead of the machine's. Zero by default.</summary>
+    public TimeSpan ServerClockOffset
+    {
+        get { lock (_sync) return _serverClockOffset; }
+        set { lock (_sync) _serverClockOffset = value; }
+    }
+
+    /// <summary>JSON sent as ext.timesync instead of a real answer, for a server that answers badly.</summary>
+    public string? TimesyncReplyOverride
+    {
+        get { lock (_sync) return _timesyncReplyOverride; }
+        set { lock (_sync) _timesyncReplyOverride = value; }
+    }
+
+    // Answers the client's timesync on a meta reply: its time echoed, this server's clock when the
+    // request arrived, and how long the request was held - which, for a connect, is the long poll.
+    private void AddTimesync(JsonObject reply, JsonObject request, DateTimeOffset received)
+    {
+        if (!TimesyncEnabled || request["ext"]?["timesync"] is not JsonObject asked)
+            return;
+
+        reply["ext"] ??= new JsonObject();
+
+        if (TimesyncReplyOverride is { } broken)
+        {
+            reply["ext"]!["timesync"] = JsonNode.Parse(broken);
+            return;
+        }
+
+        reply["ext"]!["timesync"] = new JsonObject
+        {
+            ["tc"] = asked["tc"]?.GetValue<long>(),
+            ["ts"] = (received + ServerClockOffset).ToUnixTimeMilliseconds(),
+            ["p"] = (long)(DateTimeOffset.UtcNow - received).TotalMilliseconds,
+            ["a"] = 0
+        };
+    }
+
     // ---- acknowledgements ----------------------------------------------------------------------
 
     private bool _ackEnabled;
@@ -470,9 +524,15 @@ public sealed class FakeBayeuxServer : IDisposable
     /// <summary>Drops every open WebSocket without a Close frame, as a dead network would.</summary>
     public void AbortWebSockets()
     {
-        lock (_sync)
-            // Abort alone leaves HttpListener's connection open, and the client would never notice.
-            foreach (var socket in _sockets) { socket.Abort(); socket.Dispose(); }
+        // A copy, aborted outside the lock. On .NET Framework, Abort completes the socket's pending
+        // receive on this very thread, and the reader's finally - removing the socket from the list -
+        // runs inside this loop. The lock is reentrant, so it would not stop it: the list would
+        // change under the enumeration.
+        WebSocket[] sockets;
+        lock (_sync) sockets = _sockets.ToArray();
+
+        // Abort alone leaves HttpListener's connection open, and the client would never notice.
+        foreach (var socket in sockets) { socket.Abort(); socket.Dispose(); }
     }
 
     /// <summary>
@@ -914,6 +974,8 @@ public sealed class FakeBayeuxServer : IDisposable
     /// <param name="ctx">The HTTP exchange, for the session cookie; <c>null</c> over a WebSocket, where the response has long gone.</param>
     private JsonArray Handshake(HttpListenerContext? ctx, JsonObject request, string? id)
     {
+        var received = DateTimeOffset.UtcNow;
+
         Interlocked.Increment(ref HandshakeCount);
 
         if (TakeHandshakeRejection(out var reconnect))
@@ -974,6 +1036,8 @@ public sealed class FakeBayeuxServer : IDisposable
             reply["ext"] ??= new JsonObject();
             reply["ext"]!["ack"] = true;
         }
+
+        AddTimesync(reply, request, received);
 
         return new JsonArray(reply);
     }
@@ -1063,6 +1127,18 @@ public sealed class FakeBayeuxServer : IDisposable
     /// which are pushed on their own.
     /// </param>
     private async Task<JsonArray> ConnectAsync(JsonObject request, string? id, int? scripted, bool webSocket)
+    {
+        var received = DateTimeOffset.UtcNow;
+        var replies = await ConnectRepliesAsync(request, id, scripted, webSocket).ConfigureAwait(false);
+
+        // The connect's own reply comes first; anything after it is an event.
+        if (replies.Count > 0 && replies[0] is JsonObject reply && reply["channel"]?.GetValue<string>() == "/meta/connect")
+            AddTimesync(reply, request, received);
+
+        return replies;
+    }
+
+    private async Task<JsonArray> ConnectRepliesAsync(JsonObject request, string? id, int? scripted, bool webSocket)
     {
         if (scripted == 402)
             return Reply402(id);

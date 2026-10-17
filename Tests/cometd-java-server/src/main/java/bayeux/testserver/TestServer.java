@@ -15,6 +15,7 @@ import org.cometd.bayeux.server.BayeuxServer;
 import org.cometd.bayeux.server.ServerMessage;
 import org.cometd.bayeux.server.ServerSession;
 import org.cometd.server.ext.AcknowledgedMessagesExtension;
+import org.cometd.server.ext.TimesyncExtension;
 import org.cometd.server.http.JSONHttpTransport;
 import org.cometd.server.http.jetty.CometDHandler;
 import org.cometd.server.websocket.jetty.JettyWebSocketTransport;
@@ -91,6 +92,9 @@ public final class TestServer {
         // Acknowledgements, for clients that ask for them in the handshake. Per session, as in the
         // Node.js server: a client that does not ask sees no difference.
         bayeux.addExtension(new AcknowledgedMessagesExtension());
+
+        // Timesync, answered to clients that send it - the server's half of BayeuxTimesyncExtension.
+        bayeux.addExtension(new TimesyncExtension());
 
         bayeux.addListener(new BayeuxServer.SessionListener() {
             @Override

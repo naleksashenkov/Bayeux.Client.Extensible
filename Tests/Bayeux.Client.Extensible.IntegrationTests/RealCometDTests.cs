@@ -297,6 +297,35 @@ public abstract class RealCometDTests
         Assert.Equal("from-client", Assert.Single(subscriberReceived).GetProperty("text").GetString());
         Assert.Equal("from-client", Assert.Single(publisherReceived).GetProperty("text").GetString());
     }
+
+    [SkippableFact]
+    public async Task The_reference_server_answers_timesync_with_its_clock()
+    {
+        SkipUnlessAvailable();
+
+        // The Java server has TimesyncExtension on; the Node.js port has no timesync.
+        Skip.If(UrlVariable != "BAYEUX_COMETD_JAVA_URL", "Only the Java server is set up with timesync.");
+
+        using var http = CreateClient();
+        var timesync = new BayeuxTimesyncExtension();
+
+        var options = new BayeuxClientOptions(
+            new Dictionary<string, BayeuxEventHandler> { ["/topic/time"] = (_, _) => Task.CompletedTask },
+            "cometd",
+            extensions: [timesync],
+            transportType: Transport);
+
+        await using var client = new BayeuxClient(http, options, NoAuthProvider.Instance, (_, _) => { });
+        await client.ConnectAsync();
+
+        // Through a held connect or two: the server holds each for its two-second timeout.
+        Assert.True(await WaitForAsync(() => timesync.IsTimesyncSupported));
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        // Same machine, same clock: whatever the hold, both estimates come out near zero.
+        Assert.InRange(timesync.Offset.TotalMilliseconds, -200, 200);
+        Assert.InRange(timesync.Lag.TotalMilliseconds, 0, 200);
+    }
 }
 
 /// <summary>The Node.js port of CometD. Long-polling only: it has no WebSocket transport.</summary>

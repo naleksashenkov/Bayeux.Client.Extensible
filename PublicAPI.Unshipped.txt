@@ -1,4 +1,12 @@
 #nullable enable
+Bayeux.Client.Extensible.Core.BayeuxTimesyncExtension
+Bayeux.Client.Extensible.Core.BayeuxTimesyncExtension.BayeuxTimesyncExtension(int maxSamples = 10) -> void
+Bayeux.Client.Extensible.Core.BayeuxTimesyncExtension.Incoming(Bayeux.Client.Extensible.Core.BayeuxResponseMessageModel! bayeuxResponse) -> void
+Bayeux.Client.Extensible.Core.BayeuxTimesyncExtension.IsTimesyncSupported.get -> bool
+Bayeux.Client.Extensible.Core.BayeuxTimesyncExtension.Lag.get -> System.TimeSpan
+Bayeux.Client.Extensible.Core.BayeuxTimesyncExtension.Offset.get -> System.TimeSpan
+Bayeux.Client.Extensible.Core.BayeuxTimesyncExtension.OutgoingAsync(Bayeux.Client.Extensible.Core.BayeuxRequestModel! bayeuxRequest, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Bayeux.Client.Extensible.Core.BayeuxTimesyncExtension.ServerTime.get -> System.DateTimeOffset
 Bayeux.Client.Extensible.Core.BayeuxClient.ActiveTransportType.get -> Bayeux.Client.Extensible.Core.BayeuxTransportType
 Bayeux.Client.Extensible.Core.IBayeuxClient.ActiveTransportType.get -> Bayeux.Client.Extensible.Core.BayeuxTransportType
 Bayeux.Client.Extensible.Authentication.DelegateAuthProvider

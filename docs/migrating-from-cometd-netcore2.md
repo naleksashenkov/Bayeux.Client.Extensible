@@ -20,7 +20,7 @@ synchronous calls, listeners, a transport built from an options dictionary — w
 | JSON | Newtonsoft.Json | System.Text.Json; typed data with `GetData<T>` |
 | Acknowledgements | `AckExtension` | `BayeuxAckExtension` |
 | Salesforce replay | `ReplayExtension`, `GetChannel(name, replayId)` | a sample today (`Samples/SalesforceReplayExtension.cs`); a shipped extension is planned |
-| Timesync | `TimesyncClientExtension` | not yet |
+| Timesync | `TimesyncClientExtension` | `BayeuxTimesyncExtension` |
 | Targets | netstandard2.0, netstandard2.1, net7.0 | netstandard2.0, net472, net10.0 |
 | Last release | January 2023 | — |
 
