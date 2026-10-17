@@ -53,7 +53,8 @@ Open an issue describing what you expected, what happened, the transport and aut
 
 ## Security
 
-Do not report security issues in public issues. See the repository's security policy, or contact the maintainer directly.
+Do not report security issues in public issues. Report them privately, as described in the
+[security policy](SECURITY.md) - through **Report a vulnerability** on the repository's Security tab.
 
 ## Code of conduct
 
