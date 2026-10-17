@@ -8,7 +8,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 `Unreleased` above it, then push the tag `vx.y.z`. The release workflow refuses to publish a version
 that has no section here. For a stable version only, move `PublicAPI.Unshipped.txt` into
 `PublicAPI.Shipped.txt` first: until then the API may still change, which is what a prerelease -
-`x.y.z-alpha.n`, `-beta.n`, `-rc.n` - is for.
+`x.y.z-alpha.n`, `-beta.n`, `-rc.n` - is for. The run waits for an approval in the `release`
+environment, then publishes through nuget.org Trusted Publishing: no API key is stored anywhere.
 
 ## [Unreleased]
 

@@ -9,11 +9,17 @@ on:
 
 permissions:
   contents: write        # to create the GitHub release
+  id-token: write        # Trusted Publishing: lets the job ask GitHub for an OIDC token
 
 jobs:
   publish:
     name: Publish to NuGet
     runs-on: ubuntu-latest
+
+    # Waits for an approval before it runs - the environment's protection rule - so a tag pushed
+    # by mistake publishes nothing. The nuget.org Trusted Publishing policy names this environment
+    # too: a run outside it gets no key.
+    environment: release
 
     steps:
       - uses: actions/checkout@v4
@@ -55,12 +61,21 @@ jobs:
             --output ./artifacts \
             -p:Version=${{ steps.version.outputs.value }}
 
+      # Trusted Publishing: no stored API key. GitHub signs a one-time token for this run, nuget.org
+      # checks it against the policy for this repository, workflow and environment, and returns a
+      # key valid for an hour - requested here, right before it is used.
+      - name: NuGet login
+        id: nuget
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}   # the nuget.org profile name, not the email address
+
       # Pushing the .nupkg uploads the matching .snupkg with it.
       # --skip-duplicate makes a re-run of a partly finished release harmless.
       - name: Push to NuGet
         run: |
           dotnet nuget push "./artifacts/*.nupkg" \
-            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --api-key "${{ steps.nuget.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 
