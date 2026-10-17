@@ -19,6 +19,7 @@
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
+    <PackageReleaseNotes>https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/CHANGELOG.md</PackageReleaseNotes>
     <PackageProjectUrl>https://github.com/naleksashenkov/Bayeux.Client.Extensible</PackageProjectUrl>
     <RepositoryUrl>https://github.com/naleksashenkov/Bayeux.Client.Extensible</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

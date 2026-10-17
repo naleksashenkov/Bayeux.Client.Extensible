@@ -8,10 +8,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 160 160">
   <title>Bayeux.Client.Extensible</title>
   <defs>
-    <clipPath id="tile"><rect x="0" y="0" width="160" height="160" rx="32"/></clipPath>
+    <clipPath id="tile"><rect x="0" y="0" width="160" height="160"/></clipPath>
   </defs>
 
-  <rect x="0" y="0" width="160" height="160" rx="32" fill="#0F2A44"/>
+  <rect x="0" y="0" width="160" height="160" fill="#0F2A44"/>
 
   <g clip-path="url(#tile)">
     <g fill="#FFFFFF">
@@ -27,7 +27,7 @@
       <circle cx="104" cy="150" r="1" opacity="0.5"/>
       <circle cx="14" cy="40" r="0.9" opacity="0.5"/>
     </g>
-    <path d="M126 26 L99 11 M147 44 L152 65 M152 66 L146 95" fill="none" stroke="#FFFFFF" stroke-width="0.8" opacity="0.35"/>
+    <path d="M117.7 25.1 L99 11 M142.2 50.8 L152 65 M152 66 L146 95" fill="none" stroke="#FFFFFF" stroke-width="0.8" opacity="0.35"/>
 
     <path d="M21.5 56.4 Q4.75 87.25 -10.3 119.3 L-23.7 110.5 Q-0.25 83.95 21.5 56.4 Z" fill="#F5A524" opacity="0.25"/>
     <path d="M21.5 56.4 Q3.3 86.3 -14.1 116.8 L-19.9 113 Q1.2 84.9 21.5 56.4 Z" fill="#F5A524" opacity="0.45"/>
@@ -37,10 +37,10 @@
     <path d="M57 100 C43 111 27 123 1 143 L9 151 C29 135 47 119 60 103 Z" fill="#F5A524" opacity="0.5"/>
   </g>
 
-  <circle cx="138" cy="32" r="18" fill="none" stroke="#F5A524" stroke-width="1.2" opacity="0.35"/>
-  <circle cx="138" cy="32" r="13" fill="#F5A524"/>
-  <circle cx="138" cy="29" r="4" fill="#0F2A44"/>
-  <polygon points="136,30 140,30 142,40 134,40" fill="#0F2A44"/>
+  <circle cx="132" cy="36" r="18" fill="none" stroke="#F5A524" stroke-width="1.2" opacity="0.35"/>
+  <circle cx="132" cy="36" r="13" fill="#F5A524"/>
+  <circle cx="132" cy="33" r="4" fill="#0F2A44"/>
+  <polygon points="130,34 134,34 136,44 128,44" fill="#0F2A44"/>
 
   <g transform="translate(2,0) rotate(-35 80 80)">
     <path d="M72 79 C58 76 44 70 26 60 C38 70 46 77 52 82 C46 87 36 94 24 104 C42 97 58 88 72 85 Z" fill="#FFFFFF"/>
