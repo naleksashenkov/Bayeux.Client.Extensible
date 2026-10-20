@@ -15,8 +15,8 @@ synchronous calls, listeners, a transport built from an options dictionary — w
 | Transports | long-polling | long-polling, WebSocket, `Auto` (WebSocket with fallback) |
 | HTTP | `HttpWebRequest`, `Begin`/`End` callbacks | your `HttpClient`, `async`/`await` |
 | Handlers | `IMessageListener.OnMessage`, synchronous | `BayeuxEventHandler`, asynchronous, with a cancellation token |
-| Authentication | headers fixed when the transport is created | `IAuthProvider`, replaced at runtime; Basic, bearer, refreshing OAuth token, API key, delegate |
-| Reconnect | follows the server's advice | follows the advice; on failures, opt-in `ReconnectOptions` with backoff, jitter and a session kept across network failures |
+| Authentication | a header collection on the transport, replaced with `SetHeaderCollection` | `IAuthProvider`, asked before every request; Basic, bearer, refreshing OAuth token, API key, delegate |
+| Reconnect | follows the advice; on failures, always retries in the same session, with a linear backoff (`backoffIncrement`, `maxBackoff`) | follows the advice; on failures, stops by default — opt-in `ReconnectOptions` with backoff, jitter, a retry filter and the session kept |
 | JSON | Newtonsoft.Json | System.Text.Json; typed data with `GetData<T>` |
 | Acknowledgements | `AckExtension` | `BayeuxAckExtension` |
 | Salesforce replay | `ReplayExtension`, `GetChannel(name, replayId)` | a sample today (`Samples/SalesforceReplayExtension.cs`); a shipped extension is planned |
@@ -58,8 +58,9 @@ await using var client = new BayeuxClient(
 
 - **`UseCookies = false` is required**: the client keeps each session's cookies itself, so several
   clients can share one `HttpClient`. See [The HttpClient contract](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/transports.md#the-httpclient-contract).
-- **A token that expires** no longer means rebuilding the transport: `auth.UpdateCredentials(newToken)`,
-  or `RefreshingTokenAuthProvider` to renew it without your code.
+- **A token that expires** no longer means building a new header collection — or, as
+  CometD.NetCore.Salesforce does, a new client: `auth.UpdateCredentials(newToken)`, or
+  `RefreshingTokenAuthProvider` to renew it without your code.
 - **Cookies** set with `SetCookie` go in a `CookieContainer` passed to the constructor instead.
 
 ### Connecting

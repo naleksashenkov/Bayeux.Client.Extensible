@@ -10,12 +10,12 @@
 
   <PropertyGroup>
     <PackageId>Bayeux.Client.Extensible</PackageId>
-    <Version>1.0.0-alpha.1</Version>
+    <Version>1.0.0-alpha.2</Version>
     <Authors>Nikita Aleksashenkov</Authors>
     <Copyright>Copyright (c) 2026 Nikita Aleksashenkov</Copyright>
     <Title>Bayeux / CometD client for .NET</Title>
-    <Description>A .NET Bayeux (CometD) client over WebSocket and long-polling, with pluggable authentication: Basic, bearer and refreshing OAuth tokens, API keys, or your own. Reconnects with backoff, keeps the session across network failures, falls back from WebSocket where it is blocked. Works with CometD servers and the Salesforce Streaming API. Written from the Bayeux protocol specification.</Description>
-    <PackageTags>bayeux;cometd;websocket;long-polling;push;streaming;pubsub;salesforce;platform-events;oauth;authentication</PackageTags>
+    <Description>A modern Bayeux (CometD) client for .NET Framework 4.7.2 to .NET 10, over WebSocket and long-polling. Authentication you can change at runtime: Basic, bearer and refreshing OAuth tokens, API keys, or your own. Reconnects with backoff, keeps the session across network failures, falls back from WebSocket where it is blocked. Works with CometD servers and the Salesforce Streaming API. Written from the Bayeux protocol specification.</Description>
+    <PackageTags>bayeux;cometd;websocket;long-polling;push;streaming;pubsub;salesforce;platform-events;oauth;authentication;netframework;net472;creatio;genesys</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
@@ -95,6 +95,32 @@
     <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
     <PackageReference Include="Nullable" Version="1.3.1" PrivateAssets="all" />
   </ItemGroup>
+
+  <!-- System.Text.Json: compiled against 8.0.0, depended on as 8.0.5.
+       Compiled against 8.0.0 so that the reference in our assembly is 8.0.0.0, and any host
+       with 8.0.x loads it. Hosts that bring their own copy and no redirect - Creatio 8.3 ships
+       8.0.0.0 - refuse anything later (CS1705).
+       Depended on as 8.0.5, the patched version, so that a NuGet consumer gets that and no
+       vulnerability warning; .NET Framework consumers get the 8.0.0.0 -> 8.0.0.5 redirect
+       generated for them. DependencyTests guards the reference. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0' or '$(TargetFramework)' == 'net472'">
+    <PackageDownload Include="System.Text.Json" Version="[8.0.0]" />
+  </ItemGroup>
+
+  <Target Name="CompileAgainstLowestSystemTextJson" AfterTargets="ResolveAssemblyReferences"
+          Condition="'$(TargetFramework)' == 'netstandard2.0' or '$(TargetFramework)' == 'net472'">
+    <PropertyGroup>
+      <_StjLibFolder Condition="'$(TargetFramework)' == 'net472'">net462</_StjLibFolder>
+      <_StjLibFolder Condition="'$(TargetFramework)' == 'netstandard2.0'">netstandard2.0</_StjLibFolder>
+      <_StjLowest>$(NuGetPackageRoot)system.text.json/8.0.0/lib/$(_StjLibFolder)/System.Text.Json.dll</_StjLowest>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_StjLowest)')" Text="System.Text.Json 8.0.0 not found at $(_StjLowest)." />
+    <ItemGroup>
+      <_StjResolved Include="@(ReferencePath)" Condition="'%(Filename)' == 'System.Text.Json'" />
+      <ReferencePath Remove="@(_StjResolved)" />
+      <ReferencePath Include="$(_StjLowest)" />
+    </ItemGroup>
+  </Target>
 
   <!-- Reference assemblies so net472 builds on macOS and Linux without Mono. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net472'">

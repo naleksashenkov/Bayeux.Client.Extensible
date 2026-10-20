@@ -13,6 +13,18 @@ environment, then publishes through nuget.org Trusted Publishing: no API key is 
 
 ## [Unreleased]
 
+## [1.0.0-alpha.2] - 2026-10-20
+
+### Fixed
+
+- The `net472` and `netstandard2.0` builds reference System.Text.Json **8.0.0.0** instead of
+  8.0.0.5. A host that ships its own System.Text.Json 8.0.x without a binding redirect therefore
+  compiles and loads the library — Creatio 8.3 is one; before, it refused it with CS1705.
+  - The package still depends on System.Text.Json 8.0.5, so a NuGet consumer gets the patched
+    version and no vulnerability warning.
+  - On .NET Framework the build generates the redirect to it.
+  - See [Installing](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/installing.md).
+
 ## [1.0.0-alpha.1] - 2026-10-17
 
 The first public release: the API may still change before 1.0.
