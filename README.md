@@ -23,6 +23,8 @@ Everything else is a conforming Bayeux client, written from the [Bayeux protocol
 
 ⚠️ **1.0.0-alpha.2 — the API may still change before 1.0.** The library is exercised end-to-end both against a scripted Bayeux stub and against the CometD reference servers — the [Java original](https://github.com/cometd/cometd) over long-polling and WebSocket, and its [Node.js port](https://github.com/cometd/cometd-nodejs-server) over long-polling: handshake, subscribe, wildcard delivery, message routing, `402` re-handshake, `reconnect: none`, server-initiated disconnect, cookie isolation between clients, batched subscribe and unsubscribe, partial-batch rollback, reconnect, publishing between clients, acknowledgements. It has **not** yet been run against a production deployment under sustained load.
 
+**Tried it?** Tell us how it went — against which server, inside which host, whether it worked or not — with a [server or host report](https://github.com/naleksashenkov/Bayeux.Client.Extensible/issues/new?template=compatibility_report.yml), or ask in [Discussions](https://github.com/naleksashenkov/Bayeux.Client.Extensible/discussions). During the alpha, "it works with X" is as useful as a bug.
+
 Implemented today: `BayeuxClient`, `IAuthProvider`, `HttpBasicAuthProvider`, `BearerTokenAuthProvider`, `RefreshingTokenAuthProvider`, `ApiKeyAuthProvider`, `DelegateAuthProvider`, `NoAuthProvider`, wildcard subscriptions, batched subscribe and unsubscribe, publishing, typed data, connection state, `ext` extensions with acknowledgements and timesync, opt-in reconnection with backoff and jitter, optional `ILogger`, long-polling and WebSocket transports. Salesforce durable replay is sketched in `Samples/`, not shipped.
 
 ## Coming from CometD.NetCore2?

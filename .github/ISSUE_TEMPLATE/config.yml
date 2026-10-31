@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/naleksashenkov/Bayeux.Client.Extensible/discussions
+    about: How to do something, whether the library fits your case, or an idea to talk over first.
+  - name: Security vulnerability
+    url: https://github.com/naleksashenkov/Bayeux.Client.Extensible/security/advisories/new
+    about: Report it privately, never in a public issue. See SECURITY.md.

@@ -1,0 +1,98 @@
+name: Bug report
+description: The client does something it should not, or fails to do what it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. **Never paste real tokens, passwords, session cookies or internal
+        host names** — replace them with placeholders. A security problem goes to
+        [private reporting](https://github.com/naleksashenkov/Bayeux.Client.Extensible/security/advisories/new) instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: 1.0.0-alpha.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: framework
+    attributes:
+      label: Your application runs on
+      options:
+        - .NET 10
+        - .NET 8 or 9
+        - .NET 5 – 7 or .NET Core
+        - .NET Framework
+        - .NET Framework inside a host without NuGet (plugin host, Creatio, ...)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - LongPolling (default)
+        - WebSocket
+        - Auto
+    validations:
+      required: true
+
+  - type: dropdown
+    id: auth
+    attributes:
+      label: Authentication provider
+      options:
+        - NoAuthProvider
+        - HttpBasicAuthProvider
+        - BearerTokenAuthProvider
+        - RefreshingTokenAuthProvider
+        - ApiKeyAuthProvider
+        - DelegateAuthProvider
+        - My own IAuthProvider
+    validations:
+      required: true
+
+  - type: input
+    id: server
+    attributes:
+      label: Server
+      description: The Bayeux server you connect to, and its version if you know it.
+      placeholder: CometD 8.0 (Java), Salesforce Streaming API, Genesys GWS, Cumulocity, ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: The smallest code that shows it — the options, the provider and the calls.
+      render: csharp
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, events and exceptions
+      description: |
+        `OnError` and `OnDisconnected` arguments, the exception with its stack trace, or `ILogger`
+        output at Debug level. Credentials removed.
+      render: text
+
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed every token, password, session cookie and internal host name from this report.
+          required: true

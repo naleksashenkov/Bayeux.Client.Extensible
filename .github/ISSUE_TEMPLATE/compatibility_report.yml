@@ -1,0 +1,74 @@
+name: Server or host report
+description: You tried the client against a server or inside a host — tell us whether it works, either way.
+title: "[Compatibility] "
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        During the alpha, reports that something **works** are as useful as reports that it does not:
+        they show which servers and hosts the library has really met. No credentials, tokens or
+        internal host names, please.
+
+  - type: input
+    id: server
+    attributes:
+      label: Server
+      description: The Bayeux server, with its version if you know it.
+      placeholder: CometD 8.0.12 (Java), Salesforce Streaming API v62, Genesys GWS 8.5, Cumulocity, Faye, ...
+    validations:
+      required: true
+
+  - type: input
+    id: host
+    attributes:
+      label: Where the client runs
+      description: The application type and framework; a platform it is loaded into, if any.
+      placeholder: ASP.NET Core on .NET 10, Windows service on .NET Framework 4.8, Creatio 8.3, ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: 1.0.0-alpha.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works
+        - Works, with a workaround
+        - Does not work
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      multiple: true
+      options:
+        - LongPolling
+        - WebSocket
+        - Auto
+    validations:
+      required: true
+
+  - type: input
+    id: auth
+    attributes:
+      label: Authentication
+      placeholder: HttpBasicAuthProvider, RefreshingTokenAuthProvider with OAuth, a session cookie, ...
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Details
+      description: |
+        What you did, the workaround if you needed one, and — if it does not work — the error, the
+        `OnError` / `OnDisconnected` arguments or the log.

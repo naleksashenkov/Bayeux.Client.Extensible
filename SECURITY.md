@@ -42,5 +42,6 @@ it, for example:
 - a server's response, or a man in the middle, making the client run code, exhaust memory or stop
   for good when it should recover.
 
-Ordinary bugs, missing features and questions belong in
-[issues](https://github.com/naleksashenkov/Bayeux.Client.Extensible/issues).
+Ordinary bugs and missing features belong in
+[issues](https://github.com/naleksashenkov/Bayeux.Client.Extensible/issues/new/choose), questions in
+[Discussions](https://github.com/naleksashenkov/Bayeux.Client.Extensible/discussions).

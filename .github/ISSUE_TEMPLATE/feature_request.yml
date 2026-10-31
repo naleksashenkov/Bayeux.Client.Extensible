@@ -1,0 +1,31 @@
+name: Feature request
+description: Something the library should do and does not.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and where the library gets in the way. The use case matters more than the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: An API sketch is welcome, but not required.
+      render: csharp
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today
+      description: Your workaround, if you have one.
+
+  - type: input
+    id: server
+    attributes:
+      label: Server
+      description: If it concerns a particular Bayeux server.
+      placeholder: Salesforce Streaming API, Genesys GWS, CometD (Java), ...

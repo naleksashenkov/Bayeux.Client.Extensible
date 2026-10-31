@@ -47,9 +47,17 @@ Contributions are accepted under the [Apache License, Version 2.0](LICENSE). Add
 - Add or update tests for behaviour you change.
 - Run `dotnet build` and `dotnet test` before submitting.
 
-## Reporting bugs
+## Reporting bugs, servers and ideas
 
-Open an issue describing what you expected, what happened, the transport and authentication strategy in use, and a minimal reproduction. Please redact tokens, credentials and endpoint hostnames.
+[Open an issue](https://github.com/naleksashenkov/Bayeux.Client.Extensible/issues/new/choose) and pick a form:
+
+- **Bug report** — what you expected, what happened, the transport and authentication provider in use, and a minimal reproduction.
+- **Server or host report** — you tried the client against a Bayeux server or inside a host. Tell us either way: during the alpha, "it works with X" is as useful as "it fails with X".
+- **Feature request** — the use case first, the API second.
+
+Questions — how to do something, or whether the library fits your case — go to [Discussions](https://github.com/naleksashenkov/Bayeux.Client.Extensible/discussions).
+
+Please redact tokens, credentials, session cookies and internal host names in all of them.
 
 ## Security
 
