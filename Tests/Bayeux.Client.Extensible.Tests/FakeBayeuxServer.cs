@@ -609,6 +609,9 @@ public sealed class FakeBayeuxServer : IDisposable
         }
     }
 
+    /// <summary>Set-Cookie to answer the handshake and the upgrade with, instead of the usual cookie.</summary>
+    public string? CookieForAnotherDomain { get; set; }
+
     public HttpClient CreateClient(TimeSpan? timeout = null) =>
         new HttpClient(new HttpClientHandler { UseCookies = false })
         {
@@ -795,7 +798,7 @@ public sealed class FakeBayeuxServer : IDisposable
         }
 
         // The 101 response is the only one this socket gets, so a cookie must be set on it.
-        ctx.Response.Headers.Add("Set-Cookie", "BAYEUX_UPGRADE=" + (WebSocketUpgrades + 1) + "; Path=/");
+        ctx.Response.Headers.Add("Set-Cookie", CookieForAnotherDomain ?? "BAYEUX_UPGRADE=" + (WebSocketUpgrades + 1) + "; Path=/");
 
         var socket = (await ctx.AcceptWebSocketAsync(subProtocol: null).ConfigureAwait(false)).WebSocket;
         Interlocked.Increment(ref WebSocketUpgrades);
@@ -1000,7 +1003,7 @@ public sealed class FakeBayeuxServer : IDisposable
         var clientId = "cid-" + Interlocked.Increment(ref _clientSeq);
         _currentClientId = clientId;
 
-        ctx?.Response.Headers.Add("Set-Cookie", $"BAYEUX_BROWSER={clientId}-browser; Path=/; HttpOnly");
+        ctx?.Response.Headers.Add("Set-Cookie", CookieForAnotherDomain ?? $"BAYEUX_BROWSER={clientId}-browser; Path=/; HttpOnly");
 
         var reply = new JsonObject
         {

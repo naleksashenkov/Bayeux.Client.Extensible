@@ -27,7 +27,9 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       # v0.1.0 -> 0.1.0. The tag is the single source of truth for the version; the <Version> in
       # the project file is only what a local build produces.

@@ -16,7 +16,7 @@ This is the part to get right; everything else is forgiving.
 
 **Timeout must exceed the server's hold time.** The server holds `/meta/connect` open for `advice.timeout` — 30 seconds by default in CometD, and `HttpClient.Timeout` defaults to 100, so the defaults work. If a deployment configures a longer hold, every poll fails on a healthy connection. The client checks this after the handshake and throws with both numbers rather than letting you discover it as a recurring timeout. `Timeout.InfiniteTimeSpan` is the simplest answer when the `HttpClient` is dedicated to Bayeux.
 
-**With a WebSocket, only `BaseAddress` matters.** The socket is the client's own; the timeout and the handler's settings do not apply to it. See [Transports](#transports).
+**With a WebSocket, what applies depends on the build.** On .NET 8 and later the socket is opened through your `HttpClient`, so its handler applies to the upgrade; `HttpClient.Timeout` does not limit the open socket. On the `net472` and `netstandard2.0` builds only `BaseAddress` is used. See [Transports](#transports).
 
 **On .NET Framework, raise the connection limit.** `ServicePointManager.DefaultConnectionLimit` defaults to **2**, and every Bayeux client holds one connection open permanently. The third one against the same host blocks forever with nothing in the logs.
 
@@ -33,7 +33,9 @@ Long-polling is the default, and works through every proxy. A WebSocket keeps on
 new BayeuxClientOptions(channels, "cometd", transportType: BayeuxTransportType.WebSocket);
 ```
 
-- **Same address, same path.** `http` becomes `ws` and `https` becomes `wss`. The `HttpClient` supplies only its `BaseAddress`: the socket is opened by the client, so the handler's proxy and certificates and `HttpClient.Timeout` do not apply to it.
+- **Same address, same path.** `http` becomes `ws` and `https` becomes `wss`. The address comes from the `HttpClient`'s `BaseAddress`.
+- **Through your `HttpClient` on .NET 8 and later.** The handler's proxy, client certificates, certificate validation and delegating handlers apply to the upgrade, as they do to a long poll. A handler that cannot upgrade fails with `WebSocketException`; `Auto` then falls back. `HttpClient.Timeout` does not limit the open socket.
+- **On its own on .NET Framework and `netstandard2.0`.** Those builds have no way to open a socket through a handler: it is not used, and the socket takes the system proxy.
 - **Credentials go out once per socket**, in the upgrade request. The `IAuthProvider` is called for it like for any request, and the headers it sets are carried over — nothing else is. New credentials from `UpdateCredentials` take effect when the next socket opens. Cookies work as with long-polling: the client's container is sent with the upgrade, and what the server sets on it is kept.
 - **The server must offer it.** A server without WebSocket refuses the upgrade and `ConnectAsync` throws `WebSocketException`; one that accepts the socket but does not list `websocket` in the handshake fails with `ErrorSource.Configuration`. Use `Auto`, below, to fall back to long-polling instead.
 - **Events run in order, apart from the connect.** A handler sees a channel's events in the order the server sent them, one after another, as with long-polling. But the next `/meta/connect` does not wait for them — except with [acknowledgements](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/extensions.md#acknowledgements), where CometD sends events only in connect replies.

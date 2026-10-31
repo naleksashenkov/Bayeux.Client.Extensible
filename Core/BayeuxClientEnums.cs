@@ -29,9 +29,11 @@ namespace Bayeux.Client.Extensible.Core
         /// <c>IAuthProvider</c> sets on the request, only headers are carried over.
         /// </para>
         /// <para>
-        /// The HttpClient supplies only the base address (<c>http</c> becomes <c>ws</c>,
-        /// <c>https</c> becomes <c>wss</c>); its handler - proxy, certificates - is not used.
-        /// On .NET Framework, WebSocket needs Windows 8 or later.
+        /// The address is the HttpClient's base address (<c>http</c> becomes <c>ws</c>, <c>https</c>
+        /// becomes <c>wss</c>). On .NET 8 and later the socket is opened through the HttpClient, so its
+        /// handler - proxy, certificates, delegating handlers - applies to the upgrade. On
+        /// <c>net472</c> and <c>netstandard2.0</c> it is not used, and the socket takes the system
+        /// proxy. On .NET Framework, WebSocket needs Windows 8 or later.
         /// </para>
         /// </remarks>
         WebSocket,

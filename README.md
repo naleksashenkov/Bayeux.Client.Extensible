@@ -15,7 +15,7 @@ This library is built for those deployments:
 - **Authentication as a seam** — an `IAuthProvider` the client consults for every request and socket, so credentials are attached and replaced at runtime: Basic, bearer, a refreshing OAuth token, an API key, or your own.
 - **WebSocket, long-polling, or `Auto`** — WebSocket where it gets through, long-polling where it is blocked.
 - **Built to stay connected** — opt-in reconnect with backoff and jitter, dead-socket detection, subscriptions restored after every new handshake.
-- **The .NET you run** — `net472`, `netstandard2.0` and `net10.0`, with .NET Framework tested in CI; it also loads in hosts that ship their own System.Text.Json 8.0.x, such as Creatio 8.3.
+- **The .NET you run** — `net472`, `netstandard2.0`, `net8.0` and `net10.0`, with .NET Framework tested in CI; it also loads in hosts that ship their own System.Text.Json 8.0.x, such as Creatio 8.3.
 
 Everything else is a conforming Bayeux client, written from the [Bayeux protocol specification](https://docs.cometd.org/current/reference/#_bayeux).
 
@@ -47,7 +47,7 @@ dotnet add package Bayeux.Client.Extensible --prerelease
 
 `--prerelease` while the package is in alpha: without it `dotnet add package` looks for a stable version, and there is none yet.
 
-Targets **net10.0**, **netstandard2.0** and **net472** — so .NET 5 through 10, .NET Core 2.0+, and .NET Framework 4.6.1+ can all consume it.
+Targets **net10.0**, **net8.0**, **netstandard2.0** and **net472** — so .NET 5 through 10, .NET Core 2.0+, and .NET Framework 4.6.1+ can all consume it.
 
 Using it in a host that takes a DLL rather than a NuGet package — a plugin host, or a platform that compiles your code, such as Creatio — needs a few references set by hand; see [Installing](https://github.com/naleksashenkov/Bayeux.Client.Extensible/blob/main/docs/installing.md#in-a-host-that-does-not-resolve-dependencies).
 

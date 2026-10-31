@@ -16,7 +16,8 @@ NuGet picks the build for your framework and brings its dependencies:
 | Your application | Build | Dependencies it brings |
 |---|---|---|
 | .NET 10 | `net10.0` | `Microsoft.Extensions.Logging.Abstractions` |
-| .NET Core 2.0 – .NET 9 | `netstandard2.0` | the above, `System.Text.Json`, `Microsoft.Bcl.AsyncInterfaces` |
+| .NET 8 and 9 | `net8.0` | the same |
+| .NET Core 2.0 – .NET 7 | `netstandard2.0` | the above, `System.Text.Json`, `Microsoft.Bcl.AsyncInterfaces` |
 | .NET Framework 4.7.2+ | `net472` | the same |
 | .NET Framework 4.6.1 – 4.7.1 | `netstandard2.0` | the same |
 
@@ -69,7 +70,8 @@ then up to you.
 
 Take the library from the package: open the `.nupkg` as a zip.
 - `lib/net472/Bayeux.Client.Extensible.dll` for a .NET Framework host;
-- `lib/netstandard2.0/` for a .NET Core or .NET 5+ host.
+- `lib/net8.0/` or `lib/net10.0/` for a .NET 8 or .NET 10 host;
+- `lib/netstandard2.0/` for an older .NET Core or .NET host.
 
 **A host that ships these assemblies itself serves the library with its own copies.** This holds
 when each one is at the version below or later and, on .NET Framework, has a redirect to it.

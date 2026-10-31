@@ -13,6 +13,22 @@ environment, then publishes through nuget.org Trusted Publishing: no API key is 
 
 ## [Unreleased]
 
+### Added
+
+- A `net8.0` build, so that .NET 8 and .NET 9 applications get what `net10.0` has.
+
+### Changed
+
+- On .NET 8 and later a WebSocket is opened through your `HttpClient`: its handler - proxy, client
+  certificates, certificate validation, delegating handlers - applies to the upgrade, as it does
+  to a long poll. A handler that cannot upgrade fails with `WebSocketException`, and `Auto` then
+  falls back. The `net472` and `netstandard2.0` builds are unchanged.
+
+### Fixed
+
+- A `Set-Cookie` the address may not hold, such as one for another domain, is dropped instead of
+  failing the request that received it.
+
 ## [1.0.0-alpha.2] - 2026-10-20
 
 ### Fixed

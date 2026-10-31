@@ -239,7 +239,7 @@ namespace Bayeux.Client.Extensible.Core
                 break;
                 case BayeuxTransportType.WebSocket:
                     _transport = new WebSocketTransport(
-                        httpClient.BaseAddress, 
+                        httpClient,
                         authProvider, 
                         Options.Path, 
                         cookie ?? new CookieContainer(),
@@ -255,7 +255,7 @@ namespace Bayeux.Client.Extensible.Core
                         cookieContainer);
                     
                     _webSocketTransport = new WebSocketTransport(
-                        httpClient.BaseAddress, 
+                        httpClient,
                         authProvider, 
                         Options.Path, 
                         cookieContainer,

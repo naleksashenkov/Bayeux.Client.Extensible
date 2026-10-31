@@ -40,6 +40,12 @@ namespace Bayeux.Client.Extensible.Core
         // host sees what it would see with long-polling.
         private readonly Uri _httpAddress;
 
+        #if NET
+        // The socket is opened through it, so that its handler - proxy, certificates, delegating
+        // handlers - applies to the upgrade as it does to a long poll.
+        private readonly HttpClient _httpClient;
+        #endif
+
         private readonly IAuthProvider _authProvider;
 
         // The client's, as with long-polling: sent with the upgrade request, and Set-Cookie from its
@@ -79,21 +85,33 @@ namespace Bayeux.Client.Extensible.Core
         public TimeSpan? RequestTimeout => null;
 
         /// <summary>Creates the transport. Nothing is opened until the first send.</summary>
-        /// <param name="baseAddress">The HttpClient's base address, <c>http</c> or <c>https</c>.</param>
+        /// <param name="httpClient">
+        /// Supplies the base address, <c>http</c> or <c>https</c>. On .NET the socket is opened through
+        /// it, so its handler applies to the upgrade.
+        /// </param>
         /// <param name="authProvider">Applied to the upgrade request of every socket.</param>
-        /// <param name="path">The endpoint path, relative to <paramref name="baseAddress"/>.</param>
+        /// <param name="path">The endpoint path, relative to the HttpClient's base address.</param>
         /// <param name="cookieContainer">The client's cookie store.</param>
         /// <param name="onPushed">
         /// Receives every message no request waits for. Called on the receive loop, which waits for it:
         /// it must return quickly and must not wait for a reply itself.
         /// </param>
         public WebSocketTransport(
-            Uri baseAddress,
+            HttpClient httpClient,
             IAuthProvider authProvider,
             string path,
             CookieContainer cookieContainer,
             Action<BayeuxResponseMessageModel[]> onPushed)
         {
+            if (httpClient is null)
+                throw new ArgumentNullException(nameof(httpClient));
+
+            var baseAddress = httpClient.BaseAddress!;
+
+            #if NET
+            _httpClient = httpClient;
+            #endif
+
             _httpAddress = new Uri(baseAddress, path);
 
             var builder = new UriBuilder(_httpAddress)
@@ -271,19 +289,45 @@ namespace Bayeux.Client.Extensible.Core
         private async Task<WebSocketConnection> OpenConnectionAsync(CancellationToken cancellationToken)
         {
             var socket = new ClientWebSocket();
+
+            #if NET
+            socket.Options.CollectHttpResponseDetails = true;
+            #else
             socket.Options.Cookies = _cookieContainer;
+            #endif
 
             using (var blank = new HttpRequestMessage(HttpMethod.Get, _httpAddress))
             {
                 await _authProvider.ApplyAsync(blank, cancellationToken).ConfigureAwait(false);
 
+                #if NET
+                var cookieHeader = _cookieContainer.GetCookieHeader(_httpAddress);
+
+                if (cookieHeader.Length > 0)
+                    blank.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+                #endif
+
                 foreach (var header in blank.Headers)
-                    socket.Options.SetRequestHeader(header.Key, string.Join(", ", header.Value));
+                {
+                    var separator = header.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase) ? "; " : ", ";
+                    socket.Options.SetRequestHeader(header.Key, string.Join(separator, header.Value));
+                }
             }
 
             try
             {
+                #if NET
+                await socket.ConnectAsync(_address, _httpClient, cancellationToken).ConfigureAwait(false);
+
+                if (socket.HttpResponseHeaders?.TryGetValue("Set-Cookie", out var cookies) == true)
+                {
+                    _cookieContainer.SaveCookies(_httpAddress, cookies);
+                }
+
+                socket.HttpResponseHeaders = null;
+                #else
                 await socket.ConnectAsync(_address, cancellationToken).ConfigureAwait(false);
+                #endif
             }
             catch
             {

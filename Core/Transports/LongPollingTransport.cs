@@ -133,10 +133,7 @@ namespace Bayeux.Client.Extensible.Core
             if (!response.Headers.TryGetValues("Set-Cookie", out var cookies))
                 return;
             
-            foreach (var cookie in cookies)
-            {
-                _cookieContainer.SetCookies(uri, cookie);
-            }
+            _cookieContainer.SaveCookies(uri, cookies);
         }
     }
 }

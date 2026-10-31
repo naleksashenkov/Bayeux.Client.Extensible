@@ -8,9 +8,12 @@
 
          Only on Windows: .NET Framework tests need Mono to even start elsewhere, and a "dotnet
          test" that always fails on the maintainer's own machine is a test suite people stop
-         running. CI covers net472 on a windows runner. -->
+         running. CI covers net472 on a windows runner.
+
+         net8.0 only in CI, for the same reason: it needs a runtime a machine on .NET 10 may not have. -->
     <TargetFrameworks Condition="'$(OS)' == 'Windows_NT'">net10.0;net472</TargetFrameworks>
     <TargetFrameworks Condition="'$(OS)' != 'Windows_NT'">net10.0</TargetFrameworks>
+    <TargetFrameworks Condition="'$(OS)' != 'Windows_NT' and '$(GITHUB_ACTIONS)' == 'true'">net10.0;net8.0</TargetFrameworks>
     <!-- net472 would otherwise default to C# 7.3, which predates nullable reference types. -->
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
