@@ -454,6 +454,9 @@ public sealed class FakeBayeuxServer : IDisposable
     private TimeSpan _webSocketConnectHold = TimeSpan.FromMilliseconds(500);
     private TimeSpan _publishReplyDelay;
     private readonly List<WebSocket> _sockets = new();
+
+    // The request each socket was upgraded from: only its response can close the connection.
+    private readonly Dictionary<WebSocket, HttpListenerContext> _socketContexts = new();
     private readonly HashSet<WebSocket> _mutedSockets = new();
     private readonly Queue<JsonObject> _pushedDisconnects = new();
 
@@ -528,11 +531,18 @@ public sealed class FakeBayeuxServer : IDisposable
         // receive on this very thread, and the reader's finally - removing the socket from the list -
         // runs inside this loop. The lock is reentrant, so it would not stop it: the list would
         // change under the enumeration.
-        WebSocket[] sockets;
-        lock (_sync) sockets = _sockets.ToArray();
+        KeyValuePair<WebSocket, HttpListenerContext>[] sockets;
+        lock (_sync) sockets = _socketContexts.ToArray();
 
-        // Abort alone leaves HttpListener's connection open, and the client would never notice.
-        foreach (var socket in sockets) { socket.Abort(); socket.Dispose(); }
+        foreach (var entry in sockets)
+        {
+            entry.Key.Abort();
+            entry.Key.Dispose();
+
+            // Neither closes the connection: HttpListener's stream does not own the socket, and on
+            // .NET 8 the client would never notice.
+            try { entry.Value.Response.Abort(); } catch { /* already gone */ }
+        }
     }
 
     /// <summary>
@@ -803,7 +813,7 @@ public sealed class FakeBayeuxServer : IDisposable
         var socket = (await ctx.AcceptWebSocketAsync(subProtocol: null).ConfigureAwait(false)).WebSocket;
         Interlocked.Increment(ref WebSocketUpgrades);
 
-        lock (_sync) _sockets.Add(socket);
+        lock (_sync) { _sockets.Add(socket); _socketContexts[socket] = ctx; }
 
         var session = new SocketSession();
         var sendLock = new SemaphoreSlim(1, 1);
@@ -921,7 +931,7 @@ public sealed class FakeBayeuxServer : IDisposable
         }
         finally
         {
-            lock (_sync) { _sockets.Remove(socket); _mutedSockets.Remove(socket); }
+            lock (_sync) { _sockets.Remove(socket); _socketContexts.Remove(socket); _mutedSockets.Remove(socket); }
             await pusher.ConfigureAwait(false);
             socket.Dispose();
         }

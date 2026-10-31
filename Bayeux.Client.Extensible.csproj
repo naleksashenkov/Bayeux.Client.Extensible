@@ -10,7 +10,7 @@
 
   <PropertyGroup>
     <PackageId>Bayeux.Client.Extensible</PackageId>
-    <Version>1.0.0-alpha.2</Version>
+    <Version>1.0.0-alpha.3</Version>
     <Authors>Nikita Aleksashenkov</Authors>
     <Copyright>Copyright (c) 2026 Nikita Aleksashenkov</Copyright>
     <Title>Bayeux / CometD client for .NET</Title>

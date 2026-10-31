@@ -13,6 +13,8 @@ environment, then publishes through nuget.org Trusted Publishing: no API key is 
 
 ## [Unreleased]
 
+## [1.0.0-alpha.3] - 2026-10-31
+
 ### Added
 
 - A `net8.0` build, so that .NET 8 and .NET 9 applications get what `net10.0` has.
